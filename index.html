@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Canais YouTube</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="container">
+      <section class="card header">
+        <div>
+          <h1>Gerenciador de Canais YouTube</h1>
+          <p class="muted">Projeto simples para GitHub Pages</p>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <span class="muted">Canais</span>
+            <strong id="total-canais">0</strong>
+          </div>
+          <div class="stat">
+            <span class="muted">Publicados</span>
+            <strong id="total-publicados">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="tabs">
+        <button id="tab-canais" class="tab active">Canais</button>
+        <button id="tab-anotacoes" class="tab">Anotações</button>
+        <button id="tab-planejamento" class="tab">Gerenciar Vídeo</button>
+        <button id="tab-dashboard" class="tab">Dashboard</button>
+      </section>
+
+      <section class="card" style="margin-top: 12px;">
+        <div class="toolbar">
+          <h2>Painel</h2>
+          <div class="actions">
+            <button id="btn-novo-canal" class="btn primary">Novo Canal</button>
+            <button id="btn-novo-video" class="btn primary hide">Novo Vídeo</button>
+            <button id="btn-sync" class="btn">Sincronizar Planilha</button>
+          </div>
+        </div>
+        <p id="sync-status" class="muted hide" style="margin: 0 0 10px 0;"></p>
+
+        <div id="search-wrap" class="hide" style="margin-bottom: 10px; display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+          <div class="field">
+            <label for="search">Busca</label>
+            <input id="search" type="text" placeholder="Buscar vídeos ou canais...">
+          </div>
+          <div class="field">
+            <label for="filter-canal">Filtro por canal</label>
+            <select id="filter-canal"></select>
+          </div>
+          <div class="field">
+            <label for="filter-date">Data</label>
+            <input id="filter-date" type="date">
+          </div>
+          <div class="field field-inline" style="justify-content:flex-end;">
+            <label class="check-inline" for="filter-all-dates">
+              <input id="filter-all-dates" type="checkbox">
+              <span>Mostrar todos os vídeos (ignorar data)</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="canal-form-card" class="card hide" style="margin-bottom: 10px;">
+          <h3 style="margin-bottom: 10px;">Canal</h3>
+          <form id="canal-form" class="form">
+            <div class="field">
+              <label for="canal-nome">Nome *</label>
+              <input id="canal-nome" required>
+            </div>
+            <div class="field">
+              <label for="canal-url">URL</label>
+              <input id="canal-url" type="url">
+            </div>
+            <div class="field">
+              <label for="canal-nicho">Nicho</label>
+              <input id="canal-nicho">
+            </div>
+            <div class="field">
+              <label for="canal-descricao">Descrição</label>
+              <textarea id="canal-descricao" rows="3"></textarea>
+            </div>
+            <div class="actions">
+              <button id="canal-submit" class="btn primary" type="submit">Adicionar Canal</button>
+              <button id="cancel-canal" class="btn" type="button">Cancelar</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="video-form-card" class="card hide" style="margin-bottom: 10px;">
+          <h3 style="margin-bottom: 10px;">Vídeo</h3>
+          <form id="video-form" class="form">
+            <div class="field">
+              <label for="video-titulo">Título *</label>
+              <input id="video-titulo" required>
+            </div>
+            <div class="field">
+              <label for="video-canal">Canal *</label>
+              <select id="video-canal" required></select>
+            </div>
+            <div class="field">
+              <label for="video-data">Data de publicação</label>
+              <input id="video-data" type="date">
+            </div>
+            <div class="field">
+              <label for="video-status">Status</label>
+              <select id="video-status">
+                <option value="planejado">Planejado</option>
+                <option value="em_producao">Em produção</option>
+                <option value="pronto">Pronto</option>
+                <option value="publicado">Publicado</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="video-url">URL do vídeo</label>
+              <input id="video-url" type="url">
+            </div>
+            <div class="field">
+              <label for="video-notas">Notas</label>
+              <textarea id="video-notas" rows="3"></textarea>
+            </div>
+            <div class="actions">
+              <button id="video-submit" class="btn primary" type="submit">Adicionar Vídeo</button>
+              <button id="cancel-video" class="btn" type="button">Cancelar</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="content"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
