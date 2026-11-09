@@ -773,6 +773,20 @@ function marcarPublicado(id) {
   saveVideo(id, 'Marcado como publicado.');
 }
 
+// Arrastar na Produção: muda o status (e mantém "publicado" em sincronia).
+function moverParaStatus(id, status) {
+  const hoje = getTodayISO();
+  state.videos = state.videos.map((v) => {
+    if (v.id !== id) return v;
+    if (status === 'publicado') {
+      return { ...v, status, publicado: true, dataPublicacao: v.dataPublicacao || hoje };
+    }
+    return { ...v, status, publicado: false };
+  });
+  render();
+  saveVideo(id, `Movido para "${STATUS[status]}".`);
+}
+
 function moverParaData(id, dataPublicacao) {
   state.videos = state.videos.map((v) => (v.id === id ? { ...v, dataPublicacao } : v));
   render();
@@ -1062,7 +1076,7 @@ function htmlPlanejamento() {
   ];
 
   const renderItem = (video) => `
-    <div class="kanban-item" style="--c:${canalCor(video.canalId)}" data-action="edit-video" data-id="${esc(video.id)}">
+    <div class="kanban-item" style="--c:${canalCor(video.canalId)}" data-action="edit-video" data-id="${esc(video.id)}" draggable="true" title="Clique para editar ou arraste para outra coluna">
       <div class="item-top">${htmlTipo(video.tipo)}<span class="item-hora">${esc(formatDateBR(video.dataPublicacao))}${video.horario ? ` ${esc(video.horario)}` : ''}</span></div>
       <h4>${esc(video.titulo)}</h4>
       ${state.canalAtivo ? '' : `<p class="kanban-meta"><i class="dot"></i>${esc(canalNome(video.canalId))}</p>`}
@@ -1072,11 +1086,12 @@ function htmlPlanejamento() {
   `;
 
   return `
+    <p class="muted dica" style="margin:0 0 10px;">Dica: arraste um card para outra coluna para mudar o status.</p>
     <div class="kanban-board">
       ${colunas.map(([status, titulo], i) => {
         const lista = data.filter((v) => (status === 'publicado' ? isPublicado(v) : !isPublicado(v) && v.status === status));
         return `
-          <div class="kanban-col">
+          <div class="kanban-col" data-status="${status}">
             <div class="kanban-head"><span class="kanban-index">${i + 1}</span><span>${esc(titulo)}</span><span class="muted">(${lista.length})</span></div>
             <div class="kanban-list">
               ${lista.map(renderItem).join('') || '<p class="kanban-meta">Nada aqui com estes filtros.</p>'}
@@ -1547,6 +1562,11 @@ function bindEvents() {
     if (state.selectedDate) state.ignoreDateFilter = false;
     render();
   };
+  byId('filter-hoje').onclick = () => {
+    state.selectedDate = getTodayISO();
+    state.ignoreDateFilter = false;
+    render();
+  };
   byId('filter-all-dates').onchange = (e) => {
     state.ignoreDateFilter = e.target.checked;
     if (state.ignoreDateFilter) state.selectedDate = '';
@@ -1598,32 +1618,51 @@ function bindEvents() {
     }
   });
 
-  // Arrastar cards entre os dias da semana para remarcar.
+  // Arrastar cards: entre dias da Semana (remarca) e entre colunas da Produção (muda status).
+  const alvoDrop = (el) => el.closest('.day, .kanban-col');
+  const limparDrop = () => content.querySelectorAll('.drop').forEach((d) => d.classList.remove('drop'));
+
   content.addEventListener('dragstart', (e) => {
-    const item = e.target.closest('.item[draggable="true"]');
-    if (!item) return;
-    e.dataTransfer.setData('text/plain', item.dataset.id);
+    const card = e.target.closest('[draggable="true"][data-id]');
+    if (!card) return;
+    e.dataTransfer.setData('text/plain', card.dataset.id);
     e.dataTransfer.effectAllowed = 'move';
-    item.classList.add('dragging');
+    card.classList.add('dragging');
   });
   content.addEventListener('dragend', (e) => {
-    e.target.closest?.('.item')?.classList.remove('dragging');
-    content.querySelectorAll('.day.drop').forEach((d) => d.classList.remove('drop'));
+    e.target.closest?.('[data-id]')?.classList.remove('dragging');
+    limparDrop();
   });
   content.addEventListener('dragover', (e) => {
-    const day = e.target.closest('.day');
-    if (!day) return;
+    const alvo = alvoDrop(e.target);
+    if (!alvo) return;
     e.preventDefault();
-    content.querySelectorAll('.day.drop').forEach((d) => d !== day && d.classList.remove('drop'));
-    day.classList.add('drop');
+    e.dataTransfer.dropEffect = 'move';
+    if (!alvo.classList.contains('drop')) {
+      limparDrop();
+      alvo.classList.add('drop');
+    }
+  });
+  content.addEventListener('dragleave', (e) => {
+    const alvo = alvoDrop(e.target);
+    if (alvo && !alvo.contains(e.relatedTarget)) alvo.classList.remove('drop');
   });
   content.addEventListener('drop', (e) => {
-    const day = e.target.closest('.day');
-    if (!day) return;
+    const alvo = alvoDrop(e.target);
+    if (!alvo) return;
     e.preventDefault();
+    limparDrop();
     const id = e.dataTransfer.getData('text/plain');
     const video = state.videos.find((v) => v.id === id);
-    if (video && video.dataPublicacao !== day.dataset.dia) moverParaData(id, day.dataset.dia);
+    if (!video) return;
+
+    if (alvo.classList.contains('day')) {
+      if (video.dataPublicacao !== alvo.dataset.dia) moverParaData(id, alvo.dataset.dia);
+      return;
+    }
+    const status = alvo.dataset.status;
+    const atual = isPublicado(video) ? 'publicado' : video.status;
+    if (status && status !== atual) moverParaStatus(id, status);
   });
 }
 
