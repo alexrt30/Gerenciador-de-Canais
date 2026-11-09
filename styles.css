@@ -1062,68 +1062,59 @@ details[open] > summary::before { transform: rotate(90deg); }
 
 /* ============================================================
    Janelas
+   Layout em bloco simples (sem grid/flex/animação) para funcionar
+   igual em qualquer navegador. Quem rola é o fundo escuro.
    ============================================================ */
 
-/* O fundo não rola e não tem desfoque: quem rola é o conteúdo da janela. */
 .modal-backdrop {
   position: fixed;
   top: 0;
+  right: 0;
+  bottom: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
   z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: 16px;
+  display: block;
+  padding: 6vh 16px 24px;
   background: var(--overlay);
-  overflow: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal {
+  display: block;
   position: relative;
-  display: flex;
-  flex-direction: column;
-  width: min(600px, 100%);
-  max-height: calc(100vh - 32px);
-  max-height: calc(100dvh - 32px);
+  width: 100%;
+  max-width: 600px;
+  height: auto;
+  margin: 0 auto;
   padding: 0;
   border-radius: 14px;
   box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  animation: pop .14s ease-out;
 }
 
 .modal > h3 {
-  flex-shrink: 0;
   margin: 0;
-  padding: 18px 22px 12px;
+  padding: 20px 22px 12px;
   font-size: 1.1rem;
 }
 
 .modal > form {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 14px;
-  min-height: 0;
   padding: 4px 22px 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
-/* Rodapé com os botões sempre visível */
+/* Rodapé com os botões: gruda embaixo enquanto rola */
 .modal-actions {
   position: sticky;
-  bottom: 0;
+  bottom: -24px;
+  z-index: 1;
   justify-content: flex-end;
   margin: 4px -22px 0;
   padding: 12px 22px 16px;
   background: var(--surface);
   border-top: 1px solid var(--border);
-}
-
-@keyframes pop {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  border-radius: 0 0 14px 14px;
 }
 
 body.modal-open { overflow: hidden; }
