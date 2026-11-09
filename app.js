@@ -1,10 +1,15 @@
 // ---------- Configuração da API (Cloudflare Worker + D1/SQLite) ----------
 const API_URL_PRODUCAO = 'https://gerenciador-canais-api.gerenciador-canais-api.workers.dev';
 const API_URL_LOCAL = 'http://localhost:8789';
-const IS_LOCALHOST = ['localhost', '127.0.0.1'].includes(location.hostname);
+// Local = servido em localhost ou aberto direto do disco (file://).
+const IS_LOCALHOST = location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname);
 // Permite trocar a API sem editar o código: localStorage.setItem('gc_api_url', 'https://...')
-const API_URL = (localStorage.getItem('gc_api_url') || (IS_LOCALHOST ? API_URL_LOCAL : API_URL_PRODUCAO)).replace(/\/+$/, '');
-const API_KEY_STORAGE = 'gc_api_key';
+const API_URL_OVERRIDE = localStorage.getItem('gc_api_url') || '';
+const API_URL = (API_URL_OVERRIDE || (IS_LOCALHOST ? API_URL_LOCAL : API_URL_PRODUCAO)).replace(/\/+$/, '');
+// Chave do banco de TESTES local (wrangler dev). Não vale na nuvem.
+const API_KEY_LOCAL = 'teste-local-gerenciador';
+const USA_API_LOCAL = IS_LOCALHOST && !API_URL_OVERRIDE;
+const API_KEY_STORAGE = USA_API_LOCAL ? 'gc_api_key_local' : 'gc_api_key';
 const CACHE_STORAGE = 'gc_cache_v2';
 
 // ---------- Domínio ----------
@@ -143,7 +148,7 @@ function canUseApi() {
 }
 
 function getApiKey() {
-  return localStorage.getItem(API_KEY_STORAGE) || '';
+  return localStorage.getItem(API_KEY_STORAGE) || (USA_API_LOCAL ? API_KEY_LOCAL : '');
 }
 
 // Mostra o campo para digitar a chave de acesso (fica salva só neste navegador).
@@ -265,6 +270,9 @@ async function loadData() {
     return true;
   } catch (error) {
     const hasCache = loadCache();
+    if (USA_API_LOCAL && /fetch|network|load failed/i.test(error.message)) {
+      error.message = `API local não está rodando em ${API_URL} — rode "npm run dev" na pasta worker`;
+    }
     state.syncMessage = hasCache
       ? `Banco: falha ao carregar (${error.message}). Mostrando a última cópia salva neste navegador.`
       : `Banco: falha ao carregar (${error.message}).`;
@@ -1329,6 +1337,11 @@ async function init() {
     await loadData();
   } else {
     setStatus('Banco: URL da API não configurada (API_URL_PRODUCAO no app.js).');
+  }
+  if (USA_API_LOCAL) {
+    document.title = '[LOCAL] ' + document.title;
+    const sub = document.querySelector('.header p');
+    if (sub) sub.innerHTML = '<span class="badge em_producao">MODO LOCAL</span> banco de testes — nada aqui vai para a nuvem';
   }
 }
 
