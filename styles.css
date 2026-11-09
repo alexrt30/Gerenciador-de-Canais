@@ -10,8 +10,8 @@
   --surface-2: #f2f2f4;
   --surface-hover: #ececef;
   --text: #18181b;
-  --muted: #71717a;
-  --faint: #a1a1aa;
+  --muted: #52525b;
+  --faint: #8a8a94;
   --border: #e4e4e7;
   --border-strong: #d4d4d8;
   --primary: #18181b;
@@ -21,7 +21,7 @@
   --danger: #dc2626;
   --shadow: 0 1px 2px rgba(0, 0, 0, .04);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, .18);
-  --overlay: rgba(9, 9, 11, .4);
+  --overlay: rgba(9, 9, 11, .5);
   --topbar: rgba(255, 255, 255, .85);
   --tint: 12%;
 }
@@ -32,9 +32,9 @@
   --surface: #151518;
   --surface-2: #1c1c20;
   --surface-hover: #242429;
-  --text: #f4f4f5;
-  --muted: #a1a1aa;
-  --faint: #6b6b74;
+  --text: #fafafa;
+  --muted: #c4c4cc;
+  --faint: #8e8e98;
   --border: #27272b;
   --border-strong: #35353b;
   --primary: #f4f4f5;
@@ -274,7 +274,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   left: 50%;
   bottom: 20px;
   transform: translateX(-50%);
-  z-index: 60;
+  z-index: 1100;
   max-width: min(560px, calc(100% - 32px));
   padding: 10px 16px;
   border-radius: 10px;
@@ -399,9 +399,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 .field label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text);
+  opacity: .85;
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.busca::placeholder,
+.filters input::placeholder {
+  color: var(--faint);
+  opacity: 1;
 }
 
 .field input,
@@ -1264,9 +1273,9 @@ details[open] > summary::before { transform: rotate(90deg); }
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 50;
+  z-index: 1000;
   display: block;
-  padding: 6vh 16px 24px;
+  padding: max(6vh, 24px) 16px 24px;
   background: var(--overlay);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -1275,6 +1284,8 @@ details[open] > summary::before { transform: rotate(90deg); }
 .modal {
   display: block;
   position: relative;
+  z-index: 1;
+  color: var(--text);
   width: 100%;
   max-width: 600px;
   height: auto;
@@ -1285,6 +1296,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 
 .modal > h3 {
+  color: var(--text);
   margin: 0;
   padding: 20px 22px 12px;
   font-size: 1.1rem;
@@ -1310,6 +1322,14 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 
 body.modal-open { overflow: hidden; }
+
+/* Com uma janela aberta a barra do topo fica atrás e sem desfoque
+   (alguns Chrome desenham elementos com backdrop-filter por cima). */
+body.modal-open .topbar {
+  z-index: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 /* ============================================================
    Responsivo
