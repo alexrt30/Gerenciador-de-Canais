@@ -10,6 +10,7 @@
 
 const STATUS = ['planejado', 'em_producao', 'pronto', 'publicado'];
 const CHECKS = ['roteiro', 'gravacao', 'edicao', 'thumbnail', 'publicado'];
+const TIPOS = ['short', 'longo', 'live', 'post'];
 const MAX_TEXT = 20000;
 
 export default {
@@ -207,7 +208,8 @@ function cleanCanal(input) {
     url: httpUrl(input.url, 'url'),
     nicho: text(input.nicho, 'nicho', { max: 200 }),
     descricao: text(input.descricao, 'descricao'),
-    anotacoes: notesJson(input.anotacoes)
+    anotacoes: notesJson(input.anotacoes),
+    cor: /^#[0-9a-fA-F]{6}$/.test(String(input.cor || '')) ? String(input.cor).toLowerCase() : ''
   };
 }
 
@@ -215,51 +217,61 @@ function cleanVideo(input) {
   if (!isValidId(String(input?.id || ''))) throw new HttpError(400, 'id de vídeo inválido');
   const status = String(input.status || 'planejado');
   if (!STATUS.includes(status)) throw new HttpError(400, 'status inválido');
+  const tipo = String(input.tipo || 'longo');
+  if (!TIPOS.includes(tipo)) throw new HttpError(400, 'tipo inválido');
+  const horario = String(input.horario || '').trim();
+  if (horario && !/^([01]\d|2[0-3]):[0-5]\d$/.test(horario)) throw new HttpError(400, 'horario deve ser HH:MM');
   const video = {
     id: String(input.id),
     titulo: text(input.titulo, 'titulo', { required: true, max: 300 }),
     canalId: text(input.canalId, 'canalId', { required: true, max: 64 }),
     dataPublicacao: dateOnly(input.dataPublicacao),
     status,
+    tipo,
+    horario,
     url: httpUrl(input.url, 'url'),
     notas: text(input.notas, 'notas')
   };
   CHECKS.forEach((k) => {
     video[k] = bool(input[k]);
   });
+  // Status "publicado" e checklist "publicado" andam juntos.
+  if (video.status === 'publicado') video.publicado = 1;
+  else if (video.publicado) video.status = 'publicado';
   return video;
 }
 
 // ---------- SQL ----------
 
 const UPSERT_CANAL = `
-  INSERT INTO canais (id, nome, url, nicho, descricao, anotacoes)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+  INSERT INTO canais (id, nome, url, nicho, descricao, anotacoes, cor)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
   ON CONFLICT(id) DO UPDATE SET
     nome = excluded.nome, url = excluded.url, nicho = excluded.nicho,
-    descricao = excluded.descricao, anotacoes = excluded.anotacoes,
+    descricao = excluded.descricao, anotacoes = excluded.anotacoes, cor = excluded.cor,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
 const UPSERT_VIDEO = `
   INSERT INTO videos (id, titulo, canal_id, data_publicacao, status,
-                      roteiro, gravacao, edicao, thumbnail, publicado, url, notas)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                      roteiro, gravacao, edicao, thumbnail, publicado, url, notas, tipo, horario)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
   ON CONFLICT(id) DO UPDATE SET
     titulo = excluded.titulo, canal_id = excluded.canal_id,
     data_publicacao = excluded.data_publicacao, status = excluded.status,
+    tipo = excluded.tipo, horario = excluded.horario,
     roteiro = excluded.roteiro, gravacao = excluded.gravacao, edicao = excluded.edicao,
     thumbnail = excluded.thumbnail, publicado = excluded.publicado,
     url = excluded.url, notas = excluded.notas,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
 function canalStmt(db, c) {
-  return db.prepare(UPSERT_CANAL).bind(c.id, c.nome, c.url, c.nicho, c.descricao, c.anotacoes);
+  return db.prepare(UPSERT_CANAL).bind(c.id, c.nome, c.url, c.nicho, c.descricao, c.anotacoes, c.cor);
 }
 
 function videoStmt(db, v) {
   return db.prepare(UPSERT_VIDEO).bind(
     v.id, v.titulo, v.canalId, v.dataPublicacao, v.status,
-    v.roteiro, v.gravacao, v.edicao, v.thumbnail, v.publicado, v.url, v.notas
+    v.roteiro, v.gravacao, v.edicao, v.thumbnail, v.publicado, v.url, v.notas, v.tipo, v.horario
   );
 }
 
@@ -309,6 +321,7 @@ async function exportAll(db) {
       nicho: c.nicho,
       descricao: c.descricao,
       anotacoes: c.anotacoes,
+      cor: c.cor || '',
       updatedAt: c.updated_at
     })),
     videos: videos.results.map((v) => ({
@@ -317,6 +330,8 @@ async function exportAll(db) {
       canalId: v.canal_id,
       dataPublicacao: v.data_publicacao,
       status: v.status,
+      tipo: v.tipo || 'longo',
+      horario: v.horario || '',
       roteiro: Boolean(v.roteiro),
       gravacao: Boolean(v.gravacao),
       edicao: Boolean(v.edicao),
