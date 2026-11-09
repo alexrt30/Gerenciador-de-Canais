@@ -113,19 +113,16 @@ const state = {
   tab: 'semana',
   // Semana
   weekStart: startOfWeek(getTodayISO()),
-  semanaCanalId: '',
   semanaTipo: '',
   // Canais
-  canalAbertoId: '',
+  canalAtivo: localStorage.getItem('gc_canal_ativo') || '', // '' = todos os canais
   canalTipo: '',
   // Produção
   search: '',
-  selectedCanalId: '',
   selectedTipo: '',
   selectedDate: '',
   ignoreDateFilter: true,
   // Dashboard / anotações
-  anotacoesCanalFilterId: '',
   showAnotacaoForm: false,
   anotacaoEditing: null,
   // Dados
@@ -370,6 +367,21 @@ function canalCor(canalId) {
   return PALETA[(index >= 0 ? index : 0) % PALETA.length];
 }
 
+function setCanalAtivo(canalId) {
+  state.canalAtivo = canalId && canalById(canalId) ? canalId : '';
+  state.canalTipo = '';
+  localStorage.setItem('gc_canal_ativo', state.canalAtivo);
+}
+
+// Conteúdos do canal escolhido na barra do topo (ou de todos).
+function videosVisiveis() {
+  return state.canalAtivo ? state.videos.filter((v) => v.canalId === state.canalAtivo) : state.videos;
+}
+
+function canaisVisiveis() {
+  return state.canalAtivo ? state.canais.filter((c) => c.id === state.canalAtivo) : canaisOrdenados();
+}
+
 function isPublicado(video) {
   return video.publicado || video.status === 'publicado';
 }
@@ -464,7 +476,7 @@ function setCanalNotes(canalId, notes) {
 function getFilteredNotes() {
   const items = [];
   state.canais.forEach((canal) => {
-    if (state.anotacoesCanalFilterId && canal.id !== state.anotacoesCanalFilterId) return;
+    if (state.canalAtivo && canal.id !== state.canalAtivo) return;
     getCanalNotes(canal).forEach((note) => {
       items.push({ canalId: canal.id, canalNome: canal.nome, note });
     });
@@ -574,7 +586,7 @@ function deleteCanal(id) {
   if (!confirm(`Excluir o canal "${canalNome(id)}" e ${total} conteúdo(s) dele?`)) return;
   state.canais = state.canais.filter((c) => c.id !== id);
   state.videos = state.videos.filter((v) => v.canalId !== id);
-  if (state.canalAbertoId === id) state.canalAbertoId = '';
+  if (state.canalAtivo === id) setCanalAtivo('');
   render();
   persist('DELETE', `/api/canais/${encodeURIComponent(id)}`, undefined, 'Canal excluído.');
 }
@@ -608,7 +620,7 @@ function openVideoForm(videoId = null, prefill = {}) {
   state.showVideoForm = true;
 
   const defaultCanal =
-    prefill.canalId || state.canalAbertoId || state.semanaCanalId || state.selectedCanalId || '';
+    prefill.canalId || state.canalAtivo || '';
 
   byId('video-canal').innerHTML = optionsCanais(video?.canalId || defaultCanal, 'Selecione o canal');
   byId('video-tipo').innerHTML = optionsTipos(video?.tipo || prefill.tipo || state.semanaTipo || 'longo');
@@ -712,7 +724,7 @@ function htmlStatus(video) {
 }
 
 // Cartão compacto usado na semana, no canal e nas listas.
-function htmlItem(video, { mostrarData = false, mostrarCanal = true, draggable = false } = {}) {
+function htmlItem(video, { mostrarData = false, mostrarCanal = !state.canalAtivo, draggable = false } = {}) {
   const publicado = isPublicado(video);
   const atrasado = isAtrasado(video);
   const link = safeUrl(video.url);
@@ -754,7 +766,7 @@ function htmlFiltroChips(atual, acao, incluirTodos = true) {
 function videosFiltradosSemana() {
   return state.videos.filter(
     (v) =>
-      (!state.semanaCanalId || v.canalId === state.semanaCanalId) &&
+      (!state.canalAtivo || v.canalId === state.canalAtivo) &&
       (!state.semanaTipo || v.tipo === state.semanaTipo)
   );
 }
@@ -774,7 +786,7 @@ function htmlSemana() {
   const semData = base.filter((v) => !v.dataPublicacao && !isPublicado(v)).sort(compareAgenda);
   const porTipo = contarPorTipo(daSemana);
 
-  const resumoCanais = canaisOrdenados()
+  const resumoCanais = state.canalAtivo ? '' : canaisOrdenados()
     .map((c) => {
       const lista = daSemana.filter((v) => v.canalId === c.id);
       if (!lista.length) return '';
@@ -801,9 +813,6 @@ function htmlSemana() {
         <button class="btn" data-action="semana-hoje">Hoje</button>
         <button class="btn" data-action="semana-next" aria-label="Próxima semana">▶</button>
         <strong class="semana-label">${esc(formatSemana(inicio))}</strong>
-      </div>
-      <div class="actions">
-        <select id="semana-canal" aria-label="Filtrar por canal">${optionsCanais(state.semanaCanalId, 'Todos os canais')}</select>
       </div>
     </div>
     ${htmlFiltroChips(state.semanaTipo, 'semana-tipo')}
@@ -855,7 +864,7 @@ function htmlSemana() {
 // ---------- Aba: Canais ----------
 
 function htmlCanais() {
-  if (state.canalAbertoId && canalById(state.canalAbertoId)) return htmlCanalDetalhe(state.canalAbertoId);
+  if (state.canalAtivo && canalById(state.canalAtivo)) return htmlCanalDetalhe(state.canalAtivo);
   if (!state.canais.length) return '<div class="card empty">Nenhum canal cadastrado.</div>';
 
   const hoje = getTodayISO();
@@ -963,7 +972,7 @@ function filteredVideos() {
   const selectedDate = normalizeDateOnly(state.selectedDate);
 
   return state.videos.filter((video) => {
-    const canalMatch = !state.selectedCanalId || video.canalId === state.selectedCanalId;
+    const canalMatch = !state.canalAtivo || video.canalId === state.canalAtivo;
     const tipoMatch = !state.selectedTipo || video.tipo === state.selectedTipo;
     const dateMatch = state.ignoreDateFilter || !selectedDate || video.dataPublicacao === selectedDate;
     const searchMatch =
@@ -989,7 +998,7 @@ function htmlPlanejamento() {
     <div class="kanban-item" style="--c:${canalCor(video.canalId)}" data-action="edit-video" data-id="${esc(video.id)}">
       <div class="item-top">${htmlTipo(video.tipo)}<span class="item-hora">${esc(formatDateBR(video.dataPublicacao))}${video.horario ? ` ${esc(video.horario)}` : ''}</span></div>
       <h4>${esc(video.titulo)}</h4>
-      <p class="kanban-meta"><i class="dot"></i>${esc(canalNome(video.canalId))}</p>
+      ${state.canalAtivo ? '' : `<p class="kanban-meta"><i class="dot"></i>${esc(canalNome(video.canalId))}</p>`}
       <div class="progress" style="margin-top:6px;"><span style="width:${progresso(video)}%"></span></div>
       <p class="kanban-meta" style="margin-top:4px;">Checklist: ${progresso(video)}%</p>
     </div>
@@ -1024,15 +1033,12 @@ function htmlAnotacoes() {
     : null;
 
   const allNotes = getFilteredNotes();
-  const defaultCanalId = editing?.canalId || state.anotacoesCanalFilterId || canaisOrdenados()[0]?.id || '';
+  const defaultCanalId = editing?.canalId || state.canalAtivo || canaisOrdenados()[0]?.id || '';
 
   return `
     <div class="card" style="margin-bottom:10px;">
       <div class="toolbar" style="margin-bottom:0;">
-        <div class="field" style="max-width:360px;">
-          <label for="anotacoes-canal-filter">Filtrar anotações por canal</label>
-          <select id="anotacoes-canal-filter">${optionsCanais(state.anotacoesCanalFilterId, 'Todos os canais')}</select>
-        </div>
+        <p class="muted" style="margin:0;">${state.canalAtivo ? `Anotações de <strong>${esc(canalNome(state.canalAtivo))}</strong>` : 'Anotações de todos os canais'}</p>
         <button class="btn primary" data-action="nova-anotacao">Criar anotação</button>
       </div>
     </div>
@@ -1088,12 +1094,13 @@ function htmlAnotacoes() {
 function htmlDashboard() {
   const hoje = getTodayISO();
   const inicioMes = `${hoje.slice(0, 7)}-01`;
-  const total = state.videos.length;
-  const publicados = state.videos.filter(isPublicado);
+  const visiveis = videosVisiveis();
+  const total = visiveis.length;
+  const publicados = visiveis.filter(isPublicado);
   const noMes = publicados.filter((v) => v.dataPublicacao >= inicioMes && v.dataPublicacao <= hoje).length;
-  const atrasados = state.videos.filter((v) => isAtrasado(v, hoje)).length;
+  const atrasados = visiveis.filter((v) => isAtrasado(v, hoje)).length;
 
-  const linhas = canaisOrdenados().map((c) => {
+  const linhas = canaisVisiveis().map((c) => {
     const videos = state.videos.filter((v) => v.canalId === c.id);
     const pubs = videos.filter(isPublicado);
     const ultimo = pubs.filter((v) => v.dataPublicacao).sort((a, b) => compareAgenda(b, a))[0];
@@ -1131,6 +1138,39 @@ function htmlDashboard() {
 
 // ---------- Render ----------
 
+function renderCanalBar() {
+  const bar = byId('canal-bar');
+  if (!bar) return;
+  if (!state.canais.length) {
+    bar.innerHTML = '';
+    return;
+  }
+  const hoje = getTodayISO();
+  const inicio = startOfWeek(hoje);
+  const fim = addDays(inicio, 6);
+  const daSemana = (canalId) =>
+    state.videos.filter((v) => v.canalId === canalId && v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
+
+  const botao = (id, nome, cor, extra) => `
+    <button class="canal-pill ${state.canalAtivo === id ? 'active' : ''}" style="--c:${cor}"
+            data-canal="${esc(id)}" aria-pressed="${state.canalAtivo === id}"
+            ${extra !== undefined ? `title="${extra} conteúdo(s) nesta semana"` : ''}>
+      ${id ? '<i class="dot"></i>' : ''}<span>${esc(nome)}</span>${extra !== undefined ? `<small>${extra}</small>` : ''}
+    </button>`;
+
+  bar.innerHTML = `
+    <span class="canal-bar-label">Canal:</span>
+    ${botao('', 'Todos', '#0f172a')}
+    ${canaisOrdenados().map((c) => botao(c.id, c.nome, canalCor(c.id), daSemana(c.id))).join('')}
+  `;
+  document.documentElement.style.setProperty('--canal-ativo', state.canalAtivo ? canalCor(state.canalAtivo) : 'transparent');
+  // No celular a barra rola: mantém o canal escolhido visível.
+  const ativo = bar.querySelector('.canal-pill.active');
+  if (ativo && bar.scrollWidth > bar.clientWidth) {
+    bar.scrollLeft = ativo.offsetLeft - (bar.clientWidth - ativo.offsetWidth) / 2;
+  }
+}
+
 const TITULOS_ABA = {
   semana: 'Semana',
   canais: 'Canais',
@@ -1144,13 +1184,18 @@ function render() {
   const inicio = startOfWeek(hoje);
   const fim = addDays(inicio, 6);
 
-  byId('total-canais').textContent = state.canais.length;
-  byId('total-semana').textContent = state.videos.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
-  byId('total-publicados').textContent = state.videos.filter(isPublicado).length;
+  if (state.canalAtivo && !canalById(state.canalAtivo)) setCanalAtivo('');
+  renderCanalBar();
+  const visiveis = videosVisiveis();
+  byId('total-canais').textContent = state.canalAtivo ? 1 : state.canais.length;
+  byId('total-semana').textContent = visiveis.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
+  byId('total-publicados').textContent = visiveis.filter(isPublicado).length;
 
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === state.tab));
-  const abrindoCanal = state.tab === 'canais' && state.canalAbertoId;
-  byId('painel-titulo').textContent = abrindoCanal ? 'Canal' : TITULOS_ABA[state.tab];
+  const abrindoCanal = state.tab === 'canais' && state.canalAtivo;
+  byId('painel-titulo').textContent = state.canalAtivo && state.tab !== 'canais'
+    ? `${TITULOS_ABA[state.tab]} · ${canalNome(state.canalAtivo)}`
+    : abrindoCanal ? 'Canal' : TITULOS_ABA[state.tab];
 
   byId('canal-form-card').classList.toggle('hide', !state.showCanalForm);
   byId('video-form-card').classList.toggle('hide', !state.showVideoForm);
@@ -1168,24 +1213,8 @@ function render() {
   if (state.tab === 'planejamento') content.innerHTML = htmlPlanejamento();
   if (state.tab === 'dashboard') content.innerHTML = htmlDashboard();
 
-  const semanaCanal = byId('semana-canal');
-  if (semanaCanal) {
-    semanaCanal.onchange = (e) => {
-      state.semanaCanalId = e.target.value;
-      render();
-    };
-  }
-
-  const anotacoesFiltro = byId('anotacoes-canal-filter');
-  if (anotacoesFiltro) {
-    anotacoesFiltro.onchange = (e) => {
-      state.anotacoesCanalFilterId = e.target.value;
-      render();
-    };
-  }
 
   if (state.tab === 'planejamento') {
-    byId('filter-canal').innerHTML = optionsCanais(state.selectedCanalId, 'Todos os canais');
     byId('filter-tipo').innerHTML = optionsTipos(state.selectedTipo, 'Todos os tipos');
     byId('filter-date').value = state.selectedDate;
     byId('filter-date').disabled = state.ignoreDateFilter;
@@ -1199,14 +1228,12 @@ function render() {
 
 function setTab(tab) {
   state.tab = tab;
-  if (tab !== 'canais') state.canalAbertoId = '';
   render();
 }
 
 function bindEvents() {
   document.querySelectorAll('.tab').forEach((el) => {
     el.onclick = () => {
-      if (el.dataset.tab === 'canais') state.canalAbertoId = '';
       setTab(el.dataset.tab);
     };
   });
@@ -1248,10 +1275,6 @@ function bindEvents() {
     state.search = e.target.value;
     render();
   };
-  byId('filter-canal').onchange = (e) => {
-    state.selectedCanalId = e.target.value;
-    render();
-  };
   byId('filter-tipo').onchange = (e) => {
     state.selectedTipo = e.target.value;
     render();
@@ -1266,6 +1289,13 @@ function bindEvents() {
     if (state.ignoreDateFilter) state.selectedDate = '';
     render();
   };
+
+  byId('canal-bar').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-canal]');
+    if (!btn) return;
+    setCanalAtivo(btn.dataset.canal);
+    render();
+  });
 
   const content = byId('content');
 
@@ -1286,8 +1316,8 @@ function bindEvents() {
       case 'semana-hoje': state.weekStart = startOfWeek(getTodayISO()); return render();
       case 'semana-tipo': state.semanaTipo = value; return render();
       case 'canal-tipo': state.canalTipo = value; return render();
-      case 'abrir-canal': state.tab = 'canais'; state.canalAbertoId = id; state.canalTipo = ''; window.scrollTo(0, 0); return render();
-      case 'fechar-canal': state.canalAbertoId = ''; return render();
+      case 'abrir-canal': setCanalAtivo(id); state.tab = 'canais'; window.scrollTo(0, 0); return render();
+      case 'fechar-canal': setCanalAtivo(''); return render();
       case 'edit-canal': return openCanalForm(id);
       case 'del-canal': return deleteCanal(id);
       case 'nova-anotacao': return startNewAnotacao();
