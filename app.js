@@ -75,19 +75,25 @@ function canUseApi() {
   return Boolean(API_URL && /^https?:\/\//.test(API_URL));
 }
 
-function getApiKey({ ask = true } = {}) {
-  let key = localStorage.getItem(API_KEY_STORAGE) || '';
-  if (!key && ask) {
-    key = (window.prompt('Chave de acesso da API (fica salva só neste navegador):') || '').trim();
-    if (key) localStorage.setItem(API_KEY_STORAGE, key);
-  }
-  return key;
+function getApiKey() {
+  return localStorage.getItem(API_KEY_STORAGE) || '';
+}
+
+// Mostra o campo para digitar a chave de acesso (fica salva só neste navegador).
+function showKeyForm(show = true) {
+  const form = byId('key-form');
+  if (!form) return;
+  form.classList.toggle('hide', !show);
+  if (show) setTimeout(() => byId('api-key-input')?.focus(), 0);
 }
 
 async function apiRequest(method, path, body) {
   if (!canUseApi()) throw new Error('URL da API não configurada (API_URL_PRODUCAO no app.js)');
   const key = getApiKey();
-  if (!key) throw new Error('chave de acesso não informada');
+  if (!key) {
+    showKeyForm(true);
+    throw new Error('informe a chave de acesso');
+  }
 
   const response = await fetch(`${API_URL}${path}`, {
     method,
@@ -107,7 +113,8 @@ async function apiRequest(method, path, body) {
 
   if (response.status === 401) {
     localStorage.removeItem(API_KEY_STORAGE);
-    throw new Error('chave de acesso inválida — recarregue a página e informe de novo');
+    showKeyForm(true);
+    throw new Error('chave de acesso inválida — informe de novo');
   }
   if (!response.ok || !payload?.ok) {
     throw new Error(payload?.error || `HTTP ${response.status}`);
@@ -1071,6 +1078,16 @@ function bindEvents() {
   };
 
   byId('btn-sync').onclick = () => loadData();
+
+  byId('key-form').onsubmit = (e) => {
+    e.preventDefault();
+    const key = byId('api-key-input').value.trim();
+    if (!key) return;
+    localStorage.setItem(API_KEY_STORAGE, key);
+    byId('api-key-input').value = '';
+    showKeyForm(false);
+    loadData();
+  };
 
   byId('content').addEventListener('click', (e) => {
     const { action, id, field, noteId } = e.target.dataset;

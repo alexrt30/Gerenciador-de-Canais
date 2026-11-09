@@ -43,6 +43,17 @@
         </div>
         <p id="sync-status" class="muted hide" style="margin: 0 0 10px 0;"></p>
 
+        <form id="key-form" class="card hide" style="margin-bottom: 10px;">
+          <div class="field">
+            <label for="api-key-input">Chave de acesso</label>
+            <input id="api-key-input" type="password" autocomplete="current-password" placeholder="Cole a chave de acesso da API">
+          </div>
+          <p class="muted" style="margin: 6px 0 10px 0;">Fica salva só neste navegador.</p>
+          <div class="actions">
+            <button class="btn primary" type="submit">Entrar</button>
+          </div>
+        </form>
+
         <div id="search-wrap" class="hide" style="margin-bottom: 10px; display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
           <div class="field">
             <label for="search">Busca</label>
