@@ -25,42 +25,47 @@ Arquivos principais usados no deploy:
 - `styles.css`
 - `app.js`
 
-## Salvar dados na sua planilha Google
+## Banco de dados (SQLite na nuvem — Cloudflare D1)
 
-Para salvar automaticamente na planilha, use Google Apps Script (arquivo pronto: `google-apps-script.gs`).
+Os dados ficam num banco SQLite no **Cloudflare D1**, acessado por um pequeno **Worker** (`worker/`).
+O navegador nunca fala direto com o banco: toda chamada passa pelo Worker, que exige uma **chave de acesso**.
+A chave fica guardada só no navegador de quem usa (pedida na primeira vez) e **não** vai para o código.
 
-### 1) Vincular Apps Script à planilha
-1. Abra sua planilha Google.
-2. Vá em **Extensões > Apps Script**.
-3. Apague o conteúdo padrão e cole o código de `google-apps-script.gs`.
-4. Clique em **Implantar > Nova implantação > App da Web**.
-5. Execute como: **Você**.
-6. Quem tem acesso: **Qualquer pessoa com o link**.
-7. Copie a URL do app da web.
+### Estrutura
+- `worker/src/index.js` — API (`GET /api/data`, `PUT/DELETE /api/canais/:id`, `PUT/DELETE /api/videos/:id`, `POST /api/import`)
+- `worker/migrations/0001_inicial.sql` — tabelas `canais` e `videos`
+- `scripts/migrar-planilha.mjs` — copia os dados da planilha Google antiga para o banco
 
-### 2) Conectar no app
-1. Abra `app.js`.
-2. Edite esta linha:
-	 - `const SHEETS_WEB_APP_URL = '';`
-3. Cole a URL do Apps Script entre aspas.
+### Rodar localmente
+```bash
+cd worker
+npm install
+printf 'API_KEY=teste-local-gerenciador\n' > .dev.vars   # chave só para testes locais
+npx wrangler d1 migrations apply gerenciador-canais --local
+npx wrangler dev --port 8789
+```
+Em outro terminal, sirva o site (ex.: `npx http-server . -p 8751`) e abra `http://localhost:8751`.
+Em `localhost` o app usa a API em `http://localhost:8789` automaticamente.
 
-### 3) Estrutura criada na planilha
-O script cria/atualiza 3 abas:
-- `Canais`
-	- `id, nome, url, nicho, descricao, updatedAt`
-- `Videos`
-	- `id, titulo, canalId, dataPublicacao, status, roteiro, gravacao, edicao, thumbnail, publicado, url, notas, updatedAt`
-- `LogSync`
-	- `timestamp, source, canais, videos`
+### Publicar na Cloudflare (uma vez)
+```bash
+cd worker
+npx wrangler login
+npx wrangler d1 create gerenciador-canais          # copie o database_id para o wrangler.toml
+npx wrangler d1 migrations apply gerenciador-canais --remote
+npx wrangler secret put API_KEY                     # digite uma chave forte
+npx wrangler deploy                                 # mostra a URL *.workers.dev
+```
+Depois cole a URL do Worker em `API_URL_PRODUCAO` no `app.js` e publique o site.
+
+### Migrar os dados da planilha
+```bash
+API_URL=https://gerenciador-canais-api.SEU-USUARIO.workers.dev API_KEY=SUA_CHAVE node scripts/migrar-planilha.mjs
+```
+A planilha só é lida; nada é apagado nela.
 
 ### Observações
-- O app continua salvando localmente no navegador (`localStorage`).
-- Ao salvar/editar/excluir, ele sincroniza automaticamente com a planilha.
-- Você também pode usar o botão **Sincronizar Planilha**.
-- Ao abrir o app, ele tenta carregar os dados da planilha automaticamente.
-
-### Importante após alterar o script
-Sempre que editar o Apps Script, faça uma nova implantação da versão web:
-1. **Implantar > Gerenciar implantações**
-2. Edite a implantação ativa e selecione **Nova versão**
-3. Salve para publicar as mudanças
+- Cada alteração (criar, editar, marcar checklist, excluir) é gravada na hora, registro por registro.
+- O navegador guarda uma cópia dos dados (`localStorage`) para abrir rápido e para consulta se a API cair.
+- O botão **Recarregar dados** busca de novo o que está no banco.
+- `google-apps-script.gs` ficou só como referência da integração antiga com a planilha.

@@ -1,0 +1,16 @@
+name = "gerenciador-canais-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Origens que podem chamar a API (GitHub Pages + testes locais), separadas por vírgula.
+[vars]
+ALLOWED_ORIGINS = "https://alexrt30.github.io,http://localhost:8751,http://127.0.0.1:8751"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gerenciador-canais"
+database_id = "f0d4fbe6-b60a-4d5e-b6a2-83d346e2a2de"
+migrations_dir = "migrations"
+
+# A chave de acesso NÃO fica aqui. Em produção: `npx wrangler secret put API_KEY`.
+# Para testes locais: arquivo worker/.dev.vars com `API_KEY=...` (fora do git).

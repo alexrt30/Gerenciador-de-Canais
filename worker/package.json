@@ -1,0 +1,14 @@
+{
+  "name": "gerenciador-canais-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8789",
+    "migrate:local": "wrangler d1 migrations apply gerenciador-canais --local",
+    "migrate:remote": "wrangler d1 migrations apply gerenciador-canais --remote",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

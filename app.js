@@ -1,5 +1,12 @@
-const SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbytjuhth_YUID2xC7pUoeV0v9KivPCQ8n0yQLyFnk5j89usYM4V48Zjk1RppNixlH5mww/exec';
-let syncTimer = null;
+// ---------- Configuração da API (Cloudflare Worker + D1/SQLite) ----------
+// Depois do deploy, cole aqui a URL do Worker (ex.: https://gerenciador-canais-api.SEU-USUARIO.workers.dev).
+const API_URL_PRODUCAO = 'https://gerenciador-canais-api.gerenciador-canais-api.workers.dev';
+const API_URL_LOCAL = 'http://localhost:8789';
+const IS_LOCALHOST = ['localhost', '127.0.0.1'].includes(location.hostname);
+// Permite trocar a API sem editar o código: localStorage.setItem('gc_api_url', 'https://...')
+const API_URL = (localStorage.getItem('gc_api_url') || (IS_LOCALHOST ? API_URL_LOCAL : API_URL_PRODUCAO)).replace(/\/+$/, '');
+const API_KEY_STORAGE = 'gc_api_key';
+const CACHE_STORAGE = 'gc_cache_v1';
 
 function getTodayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -53,8 +60,6 @@ const state = {
   anotacaoEditing: null,
   canais: [],
   videos: [],
-  allowDestructiveNextSync: false,
-  cloudLoadOk: false,
   syncMessage: '',
   showSyncMessage: false,
   isSyncing: false,
@@ -64,275 +69,155 @@ const state = {
   showVideoForm: false
 };
 
-function saveState() {
-  scheduleSync();
+// ---------- Acesso à API ----------
+
+function canUseApi() {
+  return Boolean(API_URL && /^https?:\/\//.test(API_URL));
 }
 
-function canSyncSheets() {
-  return Boolean(SHEETS_WEB_APP_URL && SHEETS_WEB_APP_URL.startsWith('https://'));
+function getApiKey({ ask = true } = {}) {
+  let key = localStorage.getItem(API_KEY_STORAGE) || '';
+  if (!key && ask) {
+    key = (window.prompt('Chave de acesso da API (fica salva só neste navegador):') || '').trim();
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+  }
+  return key;
 }
 
-function scheduleSync() {
-  if (!canSyncSheets()) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    syncToSheets('auto');
-  }, 800);
-}
+async function apiRequest(method, path, body) {
+  if (!canUseApi()) throw new Error('URL da API não configurada (API_URL_PRODUCAO no app.js)');
+  const key = getApiKey();
+  if (!key) throw new Error('chave de acesso não informada');
 
-function mergeById(remoteItems = [], localItems = []) {
-  const merged = new Map();
-
-  remoteItems.forEach((item) => {
-    const id = String(item?.id || '');
-    if (!id) return;
-    merged.set(id, { ...item, id });
+  const response = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined
   });
 
-  localItems.forEach((item) => {
-    const id = String(item?.id || uid());
-    merged.set(id, { ...item, id });
-  });
-
-  return Array.from(merged.values());
-}
-
-async function syncToSheets(source = 'manual') {
-  if (!canSyncSheets() || state.isSyncing) return;
-
-  if (!state.cloudLoadOk) {
-    if (source === 'auto') {
-      return;
-    }
-
-    state.showSyncMessage = true;
-    state.syncMessage = 'Planilha: carga inicial não confirmada; sincronização manual permitida com proteção anti-perda.';
-    renderSyncStatus();
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    /* resposta sem JSON */
   }
 
-  state.isSyncing = true;
+  if (response.status === 401) {
+    localStorage.removeItem(API_KEY_STORAGE);
+    throw new Error('chave de acesso inválida — recarregue a página e informe de novo');
+  }
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function saveCache() {
+  try {
+    localStorage.setItem(CACHE_STORAGE, JSON.stringify({ canais: state.canais, videos: state.videos }));
+  } catch {
+    /* sem espaço / modo privado */
+  }
+}
+
+function loadCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(CACHE_STORAGE) || 'null');
+    if (cached && Array.isArray(cached.canais) && Array.isArray(cached.videos)) {
+      applyData(cached);
+      return true;
+    }
+  } catch {
+    /* cache corrompido */
+  }
+  return false;
+}
+
+function applyData(data) {
+  const incomingCanais = Array.isArray(data?.canais) ? data.canais : [];
+  const incomingVideos = Array.isArray(data?.videos) ? data.videos : [];
+
+  state.canais = incomingCanais.map((canal) => ({
+    id: String(canal.id),
+    nome: String(canal.nome || ''),
+    url: String(canal.url || ''),
+    nicho: String(canal.nicho || ''),
+    descricao: String(canal.descricao || ''),
+    anotacoes: serializeCanalNotes(parseCanalNotes(canal.anotacoes))
+  }));
+
+  state.videos = incomingVideos.map((video) => ({
+    id: String(video.id),
+    titulo: String(video.titulo || ''),
+    canalId: String(video.canalId || ''),
+    dataPublicacao: normalizeDateOnly(video.dataPublicacao),
+    status: String(video.status || 'planejado'),
+    roteiro: Boolean(video.roteiro),
+    gravacao: Boolean(video.gravacao),
+    edicao: Boolean(video.edicao),
+    thumbnail: Boolean(video.thumbnail),
+    publicado: Boolean(video.publicado),
+    url: String(video.url || ''),
+    notas: String(video.notas || '')
+  }));
+}
+
+function setStatus(message) {
   state.showSyncMessage = true;
-  state.syncMessage = `Planilha: sincronizando (${source})...`;
+  state.syncMessage = message;
   renderSyncStatus();
-
-  let syncCanais = [...state.canais];
-  let syncVideos = [...state.videos];
-  const allowDestructiveSync = state.allowDestructiveNextSync;
-
-  if (!allowDestructiveSync) {
-    try {
-      const remotePayload = await loadFromSheetsRemote();
-      if (remotePayload?.ok && remotePayload?.data) {
-        const remoteCanais = Array.isArray(remotePayload.data.canais) ? remotePayload.data.canais : [];
-        const remoteVideos = Array.isArray(remotePayload.data.videos) ? remotePayload.data.videos : [];
-
-        syncCanais = mergeById(remoteCanais, state.canais);
-        syncVideos = mergeById(remoteVideos, state.videos);
-
-        if (syncCanais.length !== state.canais.length || syncVideos.length !== state.videos.length) {
-          state.canais = syncCanais;
-          state.videos = syncVideos;
-        }
-      }
-    } catch {
-      // segue com dados locais quando não conseguir ler a nuvem
-    }
-  }
-
-  const payload = {
-    action: 'replace_all',
-    source,
-    allowEmptyOverwrite: false,
-    allowDestructiveSync,
-    generatedAt: new Date().toISOString(),
-    data: {
-      canais: syncCanais,
-      videos: syncVideos
-    }
-  };
-
-  try {
-    const response = await fetch(SHEETS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (!result.ok) {
-      throw new Error(result.error || 'Falha de sincronização');
-    }
-
-    state.syncMessage = `Planilha: sincronizado em ${new Date().toLocaleTimeString('pt-BR')}`;
-  } catch (error) {
-    state.syncMessage = `Planilha: falha ao sincronizar (${error.message})`;
-  } finally {
-    state.allowDestructiveNextSync = false;
-    state.isSyncing = false;
-    renderSyncStatus();
-  }
 }
 
-async function loadFromSheets() {
-  if (!canSyncSheets()) return false;
-
-  const previousMessage = state.syncMessage;
-  const previousVisibility = state.showSyncMessage;
+async function loadData() {
+  if (state.isSyncing) return false;
+  state.isSyncing = true;
+  setStatus('Banco: carregando...');
 
   try {
-    const payload = await loadFromSheetsRemote();
-    if (!payload.ok || !payload.data) {
-      throw new Error(payload.error || 'Resposta inválida');
-    }
-
-    const incomingCanais = Array.isArray(payload.data.canais) ? payload.data.canais : [];
-    const incomingVideos = Array.isArray(payload.data.videos) ? payload.data.videos : [];
-
-    state.canais = incomingCanais.map((canal) => ({
-      id: String(canal.id || uid()),
-      nome: String(canal.nome || ''),
-      url: String(canal.url || ''),
-      nicho: String(canal.nicho || ''),
-      descricao: String(canal.descricao || ''),
-      anotacoes: serializeCanalNotes(parseCanalNotes(canal.anotacoes))
-    }));
-
-    state.videos = incomingVideos.map((video) => ({
-      id: String(video.id || uid()),
-      titulo: String(video.titulo || ''),
-      canalId: String(video.canalId || ''),
-      dataPublicacao: normalizeDateOnly(video.dataPublicacao),
-      status: String(video.status || 'planejado'),
-      roteiro: Boolean(video.roteiro),
-      gravacao: Boolean(video.gravacao),
-      edicao: Boolean(video.edicao),
-      thumbnail: Boolean(video.thumbnail),
-      publicado: Boolean(video.publicado),
-      url: String(video.url || ''),
-      notas: String(video.notas || '')
-    }));
-
-    state.cloudLoadOk = true;
-    state.syncMessage = `Planilha: dados carregados em ${new Date().toLocaleTimeString('pt-BR')}`;
+    const payload = await apiRequest('GET', '/api/data');
+    applyData(payload.data);
+    saveCache();
+    state.syncMessage = `Banco: dados carregados às ${new Date().toLocaleTimeString('pt-BR')}`;
     return true;
   } catch (error) {
-    state.syncMessage = `Planilha: falha ao carregar (${error.message}).`;
-    state.showSyncMessage = true;
+    const hasCache = loadCache();
+    state.syncMessage = hasCache
+      ? `Banco: falha ao carregar (${error.message}). Mostrando a última cópia salva neste navegador.`
+      : `Banco: falha ao carregar (${error.message}).`;
     return false;
   } finally {
-    renderSyncStatus();
+    state.isSyncing = false;
+    state.showSyncMessage = true;
+    render();
   }
 }
 
-async function loadFromSheetsRemote() {
-  const errors = [];
-
+// Salva um registro no banco. A tela já foi atualizada antes; se falhar, avisa.
+async function persist(method, path, body, okMessage) {
+  saveCache();
   try {
-    return await loadFromSheetsPost();
+    await apiRequest(method, path, body);
+    setStatus(okMessage || `Banco: salvo às ${new Date().toLocaleTimeString('pt-BR')}`);
+    return true;
   } catch (error) {
-    errors.push(`POST: ${error.message}`);
-  }
-
-  try {
-    return await loadFromSheetsGet();
-  } catch (error) {
-    errors.push(`GET: ${error.message}`);
-  }
-
-  try {
-    return await loadFromSheetsJsonp();
-  } catch (error) {
-    errors.push(`JSONP: ${error.message}`);
-  }
-
-  throw new Error(errors.join(' | '));
-}
-
-function parseSheetsResponse(text, sourceLabel) {
-  try {
-    const payload = JSON.parse(text);
-    if (!payload?.ok) {
-      throw new Error(payload?.error || `Falha no ${sourceLabel} export_all`);
-    }
-    return payload;
-  } catch {
-    const htmlErrorMatch = text.match(/ReferenceError:[^<\n]+/i);
-    if (htmlErrorMatch) {
-      throw new Error(htmlErrorMatch[0]);
-    }
-
-    if (text.includes('<title>Erro</title>')) {
-      throw new Error('Endpoint do Apps Script retornou página de erro HTML');
-    }
-
-    throw new Error(`Resposta inválida no ${sourceLabel} export_all`);
+    setStatus(`Banco: NÃO salvo (${error.message}). Clique em "Recarregar dados" para ver o que está no banco.`);
+    return false;
   }
 }
 
-async function loadFromSheetsPost() {
-  const response = await fetch(SHEETS_WEB_APP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'export_all' })
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const text = await response.text();
-  return parseSheetsResponse(text, 'POST');
+function saveCanal(canalId, okMessage) {
+  const canal = state.canais.find((c) => c.id === canalId);
+  if (!canal) return Promise.resolve(false);
+  return persist('PUT', `/api/canais/${encodeURIComponent(canalId)}`, canal, okMessage);
 }
 
-async function loadFromSheetsGet() {
-  const response = await fetch(`${SHEETS_WEB_APP_URL}?action=export_all&_=${Date.now()}`, {
-    method: 'GET'
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const text = await response.text();
-  return parseSheetsResponse(text, 'GET');
-}
-
-function loadFromSheetsJsonp() {
-  return new Promise((resolve, reject) => {
-    const callbackName = `sheetCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    const script = document.createElement('script');
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error('Timeout ao carregar planilha'));
-    }, 12000);
-
-    function cleanup() {
-      clearTimeout(timeoutId);
-      if (script.parentNode) script.parentNode.removeChild(script);
-      try {
-        delete window[callbackName];
-      } catch {
-        window[callbackName] = undefined;
-      }
-    }
-
-    window[callbackName] = (payload) => {
-      cleanup();
-      resolve(payload);
-    };
-
-    script.onerror = () => {
-      cleanup();
-      reject(new Error('Falha de carregamento JSONP'));
-    };
-
-    script.src = `${SHEETS_WEB_APP_URL}?action=export_all&callback=${callbackName}&_=${Date.now()}`;
-    document.body.appendChild(script);
-  });
+function saveVideo(videoId, okMessage) {
+  const video = state.videos.find((v) => v.id === videoId);
+  if (!video) return Promise.resolve(false);
+  return persist('PUT', `/api/videos/${encodeURIComponent(videoId)}`, video, okMessage);
 }
 
 function renderSyncStatus() {
@@ -343,13 +228,13 @@ function renderSyncStatus() {
     statusEl.classList.toggle('hide', !state.showSyncMessage || !state.syncMessage);
   }
   if (buttonEl) {
-    buttonEl.disabled = state.isSyncing || !canSyncSheets();
-    buttonEl.textContent = state.isSyncing ? 'Sincronizando...' : 'Sincronizar Planilha';
+    buttonEl.disabled = state.isSyncing;
+    buttonEl.textContent = state.isSyncing ? 'Carregando...' : 'Recarregar dados';
   }
 }
 
 function uid() {
-  return `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
 function byId(id) {
@@ -485,12 +370,10 @@ function saveAnotacaoForm() {
   }
 
   setCanalNotes(canalId, notes);
-  saveState();
   state.showAnotacaoForm = false;
   state.anotacaoEditing = null;
-  state.showSyncMessage = true;
-  state.syncMessage = 'Anotação salva com sucesso.';
   render();
+  saveCanal(canalId, 'Anotação salva com sucesso.');
 }
 
 function deleteCanalAnotacao(canalId, noteId) {
@@ -499,10 +382,8 @@ function deleteCanalAnotacao(canalId, noteId) {
 
   const notes = getCanalNotes(canal).filter((note) => note.id !== noteId);
   setCanalNotes(canalId, notes);
-  saveState();
-  state.showSyncMessage = true;
-  state.syncMessage = `Anotação removida de ${canalNome(canalId)}.`;
   render();
+  saveCanal(canalId, `Anotação removida de ${canalNome(canalId)}.`);
 }
 
 function canalNome(canalId) {
@@ -565,16 +446,17 @@ function upsertCanal(e) {
   };
   if (!canal.nome) return;
 
+  const canalId = state.editingCanalId || uid();
   if (state.editingCanalId) {
-    state.canais = state.canais.map(c => c.id === state.editingCanalId ? { ...c, ...canal } : c);
+    state.canais = state.canais.map(c => c.id === canalId ? { ...c, ...canal } : c);
   } else {
-    state.canais.push({ id: uid(), ...canal, anotacoes: '[]' });
+    state.canais.push({ id: canalId, ...canal, anotacoes: '[]' });
   }
 
   state.showCanalForm = false;
   resetCanalForm();
-  saveState();
   render();
+  saveCanal(canalId);
 }
 
 function upsertVideo(e) {
@@ -590,11 +472,12 @@ function upsertVideo(e) {
 
   if (!base.titulo || !base.canalId) return;
 
+  const videoId = state.editingVideoId || uid();
   if (state.editingVideoId) {
-    state.videos = state.videos.map(v => v.id === state.editingVideoId ? { ...v, ...base } : v);
+    state.videos = state.videos.map(v => v.id === videoId ? { ...v, ...base } : v);
   } else {
     state.videos.push({
-      id: uid(),
+      id: videoId,
       ...base,
       roteiro: false,
       gravacao: false,
@@ -606,25 +489,23 @@ function upsertVideo(e) {
 
   state.showVideoForm = false;
   resetVideoForm();
-  saveState();
   render();
+  saveVideo(videoId);
 }
 
 function deleteCanal(id) {
   if (!confirm('Excluir canal e vídeos vinculados?')) return;
   state.canais = state.canais.filter(c => c.id !== id);
   state.videos = state.videos.filter(v => v.canalId !== id);
-  state.allowDestructiveNextSync = true;
-  saveState();
   render();
+  persist('DELETE', `/api/canais/${encodeURIComponent(id)}`, undefined, 'Canal excluído.');
 }
 
 function deleteVideo(id) {
   if (!confirm('Excluir vídeo?')) return;
   state.videos = state.videos.filter(v => v.id !== id);
-  state.allowDestructiveNextSync = true;
-  saveState();
   render();
+  persist('DELETE', `/api/videos/${encodeURIComponent(id)}`, undefined, 'Vídeo excluído.');
 }
 
 function editCanal(id) {
@@ -655,8 +536,8 @@ function editVideo(id) {
 
 function toggleCheck(videoId, field) {
   state.videos = state.videos.map(v => v.id === videoId ? { ...v, [field]: !v[field] } : v);
-  saveState();
   render();
+  saveVideo(videoId);
 }
 
 function htmlCanais() {
@@ -685,10 +566,7 @@ function saveCanalAnotacoes(canalId) {
   const canal = state.canais.find((item) => item.id === canalId);
   if (!canal) return;
   setCanalNotes(canalId, getCanalNotes(canal));
-  saveState();
-  state.showSyncMessage = true;
-  state.syncMessage = `Anotações salvas para ${canalNome(canalId)}.`;
-  renderSyncStatus();
+  saveCanal(canalId, `Anotações salvas para ${canalNome(canalId)}.`);
 }
 
 function htmlAnotacoes() {
@@ -1192,15 +1070,7 @@ function bindEvents() {
     render();
   };
 
-  byId('btn-sync').onclick = () => {
-    if (!canSyncSheets()) {
-      state.showSyncMessage = true;
-      state.syncMessage = 'Planilha: configure a URL do Apps Script no app.js';
-      renderSyncStatus();
-      return;
-    }
-    syncToSheets('manual');
-  };
+  byId('btn-sync').onclick = () => loadData();
 
   byId('content').addEventListener('click', (e) => {
     const { action, id, field, noteId } = e.target.dataset;
@@ -1224,21 +1094,15 @@ function bindEvents() {
 }
 
 async function init() {
-  state.canais = [];
-  state.videos = [];
-  if (canSyncSheets()) {
-    state.syncMessage = 'Planilha: pronta para sincronizar';
-  }
   bindEvents();
-
-  if (canSyncSheets()) {
-    await loadFromSheets();
-  } else {
-    state.showSyncMessage = true;
-    state.syncMessage = 'Planilha: URL de sincronização não configurada.';
-  }
-
+  loadCache(); // mostra a última cópia na hora, enquanto o banco responde
   render();
+
+  if (canUseApi()) {
+    await loadData();
+  } else {
+    setStatus('Banco: URL da API não configurada (API_URL_PRODUCAO no app.js).');
+  }
 }
 
 init();
