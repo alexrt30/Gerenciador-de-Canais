@@ -3,93 +3,102 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerenciador de Canais YouTube</title>
+    <title>Gerenciador de Canais</title>
+    <script>
+      // Aplica o tema antes de desenhar a página (evita piscar).
+      (function () {
+        var t = localStorage.getItem('gc_tema');
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main class="container">
-      <section class="card header">
-        <div>
-          <h1>Gerenciador de Canais</h1>
-          <p class="muted">Agenda de postagens por canal</p>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          </span>
+          <span class="brand-name">Canais</span>
+          <span id="modo-local" class="modo-local hide">Local</span>
         </div>
-        <div class="stats">
-          <div class="stat">
-            <span class="muted">Canais</span>
-            <strong id="total-canais">0</strong>
-          </div>
-          <div class="stat">
-            <span class="muted">Nesta semana</span>
-            <strong id="total-semana">0</strong>
-          </div>
-          <div class="stat">
-            <span class="muted">Publicados</span>
-            <strong id="total-publicados">0</strong>
-          </div>
+
+        <nav class="tabs" aria-label="Seções">
+          <button class="tab active" data-tab="semana">Semana</button>
+          <button class="tab" data-tab="canais">Canais</button>
+          <button class="tab" data-tab="planejamento">Produção</button>
+          <button class="tab" data-tab="anotacoes">Anotações</button>
+          <button class="tab" data-tab="dashboard">Dashboard</button>
+        </nav>
+
+        <div class="topbar-actions">
+          <button id="btn-sync" class="icon-btn" title="Recarregar dados" aria-label="Recarregar dados">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button id="btn-tema" class="icon-btn" title="Alternar tema claro/escuro" aria-label="Alternar tema claro/escuro">
+            <svg class="ico-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+            <svg class="ico-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          </button>
         </div>
-      </section>
+      </div>
 
       <nav id="canal-bar" class="canal-bar" aria-label="Escolher canal"></nav>
+    </header>
 
-      <nav class="tabs">
-        <button id="tab-semana" class="tab active" data-tab="semana">Semana</button>
-        <button id="tab-canais" class="tab" data-tab="canais">Canais</button>
-        <button id="tab-planejamento" class="tab" data-tab="planejamento">Produção</button>
-        <button id="tab-anotacoes" class="tab" data-tab="anotacoes">Anotações</button>
-        <button id="tab-dashboard" class="tab" data-tab="dashboard">Dashboard</button>
-      </nav>
-
-      <section class="card" style="margin-top: 12px;">
-        <div class="toolbar">
-          <h2 id="painel-titulo">Semana</h2>
-          <div class="actions">
-            <button id="btn-novo-canal" class="btn primary">Novo canal</button>
-            <button id="btn-novo-video" class="btn primary">Novo conteúdo</button>
-            <button id="btn-sync" class="btn">Recarregar dados</button>
-          </div>
+    <main class="container">
+      <div class="page-head">
+        <h1 id="painel-titulo">Semana</h1>
+        <div class="actions">
+          <button id="btn-novo-canal" class="btn primary">+ Novo canal</button>
+          <button id="btn-novo-video" class="btn primary">+ Novo conteúdo</button>
         </div>
-        <p id="sync-status" class="muted hide" style="margin: 0 0 10px 0;"></p>
+      </div>
 
-        <form id="key-form" class="card hide" style="margin-bottom: 10px;">
-          <div class="field">
-            <label for="api-key-input">Chave de acesso</label>
-            <input id="api-key-input" type="password" autocomplete="current-password" placeholder="Cole a chave de acesso da API">
-          </div>
-          <p class="muted" style="margin: 6px 0 10px 0;">Fica salva só neste navegador.</p>
-          <div class="actions">
-            <button class="btn primary" type="submit">Entrar</button>
-          </div>
-        </form>
-
-        <div id="search-wrap" class="filters hide">
-          <div class="field">
-            <label for="search">Busca</label>
-            <input id="search" type="text" placeholder="Buscar por título ou canal...">
-          </div>
-          <div class="field">
-            <label for="filter-tipo">Tipo</label>
-            <select id="filter-tipo"></select>
-          </div>
-          <div class="field">
-            <label for="filter-date">Data</label>
-            <input id="filter-date" type="date">
-          </div>
-          <div class="field field-inline" style="justify-content:flex-end;">
-            <label class="check-inline" for="filter-all-dates">
-              <input id="filter-all-dates" type="checkbox">
-              <span>Todas as datas</span>
-            </label>
-          </div>
+      <form id="key-form" class="card hide" style="margin-bottom: 16px; max-width: 460px;">
+        <div class="field">
+          <label for="api-key-input">Chave de acesso</label>
+          <input id="api-key-input" type="password" autocomplete="current-password" placeholder="Cole a chave de acesso da API">
         </div>
+        <p class="muted" style="margin: 6px 0 10px 0;">Fica salva só neste navegador.</p>
+        <div class="actions">
+          <button class="btn primary" type="submit">Entrar</button>
+        </div>
+      </form>
 
-        <div id="content"></div>
-      </section>
+      <div id="search-wrap" class="filters hide">
+        <div class="field">
+          <label for="search">Busca</label>
+          <input id="search" type="text" placeholder="Buscar por título ou canal...">
+        </div>
+        <div class="field">
+          <label for="filter-tipo">Tipo</label>
+          <select id="filter-tipo"></select>
+        </div>
+        <div class="field">
+          <label for="filter-date">Data</label>
+          <input id="filter-date" type="date">
+        </div>
+        <div class="field field-inline">
+          <label class="check-inline" for="filter-all-dates">
+            <input id="filter-all-dates" type="checkbox">
+            <span>Todas as datas</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="content"></div>
     </main>
+
+    <div id="sync-status" class="toast hide" role="status" aria-live="polite"></div>
 
     <!-- Formulário de canal (janela) -->
     <div id="canal-form-card" class="modal-backdrop hide">
       <div class="card modal" role="dialog" aria-modal="true" aria-labelledby="canal-form-titulo">
-        <h3 id="canal-form-titulo" style="margin-bottom: 10px;">Canal</h3>
+        <h3 id="canal-form-titulo">Canal</h3>
         <form id="canal-form" class="form">
           <div class="form-row">
             <div class="field" style="flex:1;">
@@ -113,9 +122,9 @@
             <label for="canal-descricao">Descrição</label>
             <textarea id="canal-descricao" rows="3"></textarea>
           </div>
-          <div class="actions">
-            <button id="canal-submit" class="btn primary" type="submit">Adicionar canal</button>
+          <div class="actions modal-actions">
             <button id="cancel-canal" class="btn" type="button">Cancelar</button>
+            <button id="canal-submit" class="btn primary" type="submit">Adicionar canal</button>
           </div>
         </form>
       </div>
@@ -124,7 +133,7 @@
     <!-- Formulário de conteúdo (janela) -->
     <div id="video-form-card" class="modal-backdrop hide">
       <div class="card modal" role="dialog" aria-modal="true" aria-labelledby="video-form-titulo">
-        <h3 id="video-form-titulo" style="margin-bottom: 10px;">Conteúdo</h3>
+        <h3 id="video-form-titulo">Conteúdo</h3>
         <form id="video-form" class="form">
           <div class="field">
             <label for="video-titulo">Título *</label>
@@ -168,12 +177,10 @@
             <textarea id="video-notas" rows="4"></textarea>
           </div>
           <div id="video-checklist"></div>
-          <div class="actions" style="justify-content: space-between;">
-            <div class="actions">
-              <button id="video-submit" class="btn primary" type="submit">Adicionar</button>
-              <button id="cancel-video" class="btn" type="button">Cancelar</button>
-            </div>
-            <button id="delete-video" class="btn danger hide" type="button">Excluir</button>
+          <div class="actions modal-actions">
+            <button id="delete-video" class="btn danger hide" type="button" style="margin-right:auto;">Excluir</button>
+            <button id="cancel-video" class="btn" type="button">Cancelar</button>
+            <button id="video-submit" class="btn primary" type="submit">Adicionar</button>
           </div>
         </form>
       </div>

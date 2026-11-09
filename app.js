@@ -306,17 +306,50 @@ function saveVideo(videoId, okMessage) {
   return persist('PUT', `/api/videos/${encodeURIComponent(videoId)}`, video, okMessage);
 }
 
+let toastTimer = null;
+let toastUltimaMsg = '';
+
 function renderSyncStatus() {
   const statusEl = byId('sync-status');
   const buttonEl = byId('btn-sync');
-  if (statusEl) {
-    statusEl.textContent = state.syncMessage;
-    statusEl.classList.toggle('hide', !state.showSyncMessage || !state.syncMessage);
-  }
   if (buttonEl) {
     buttonEl.disabled = state.isSyncing;
-    buttonEl.textContent = state.isSyncing ? 'Carregando...' : 'Recarregar dados';
+    buttonEl.classList.toggle('spinning', state.isSyncing);
   }
+  if (!statusEl) return;
+
+  const msg = state.showSyncMessage ? state.syncMessage : '';
+  const erro = /falha|NÃO salvo|não está rodando|inválida|informe/i.test(msg);
+  // "carregando" e "carregados" não precisam de aviso: o ícone já gira.
+  const silencioso = !erro && /^Banco: (carregando|dados carregados)/.test(msg);
+
+  if (!msg || silencioso) {
+    if (silencioso) statusEl.classList.add('hide');
+    return;
+  }
+  if (msg === toastUltimaMsg && !statusEl.classList.contains('hide')) return;
+  toastUltimaMsg = msg;
+
+  statusEl.textContent = msg.replace(/^Banco: /, '');
+  statusEl.classList.toggle('erro', erro);
+  statusEl.classList.remove('hide');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    statusEl.classList.add('hide');
+    toastUltimaMsg = '';
+  }, erro ? 8000 : 2500);
+}
+
+// ---------- Tema claro / escuro ----------
+
+function temaAtual() {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function alternarTema() {
+  const novo = temaAtual() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = novo;
+  localStorage.setItem('gc_tema', novo);
 }
 
 // ---------- Utilidades ----------
@@ -1160,7 +1193,7 @@ function renderCanalBar() {
 
   bar.innerHTML = `
     <span class="canal-bar-label">Canal:</span>
-    ${botao('', 'Todos', '#0f172a')}
+    ${botao('', 'Todos', 'var(--text)')}
     ${canaisOrdenados().map((c) => botao(c.id, c.nome, canalCor(c.id), daSemana(c.id))).join('')}
   `;
   document.documentElement.style.setProperty('--canal-ativo', state.canalAtivo ? canalCor(state.canalAtivo) : 'transparent');
@@ -1180,16 +1213,8 @@ const TITULOS_ABA = {
 };
 
 function render() {
-  const hoje = getTodayISO();
-  const inicio = startOfWeek(hoje);
-  const fim = addDays(inicio, 6);
-
   if (state.canalAtivo && !canalById(state.canalAtivo)) setCanalAtivo('');
   renderCanalBar();
-  const visiveis = videosVisiveis();
-  byId('total-canais').textContent = state.canalAtivo ? 1 : state.canais.length;
-  byId('total-semana').textContent = visiveis.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
-  byId('total-publicados').textContent = visiveis.filter(isPublicado).length;
 
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === state.tab));
   const abrindoCanal = state.tab === 'canais' && state.canalAtivo;
@@ -1197,6 +1222,7 @@ function render() {
     ? `${TITULOS_ABA[state.tab]} · ${canalNome(state.canalAtivo)}`
     : abrindoCanal ? 'Canal' : TITULOS_ABA[state.tab];
 
+  document.querySelector('.page-head').classList.toggle('hide', Boolean(abrindoCanal));
   byId('canal-form-card').classList.toggle('hide', !state.showCanalForm);
   byId('video-form-card').classList.toggle('hide', !state.showVideoForm);
   document.body.classList.toggle('modal-open', state.showCanalForm || state.showVideoForm);
@@ -1241,6 +1267,7 @@ function bindEvents() {
   byId('btn-novo-canal').onclick = () => openCanalForm();
   byId('btn-novo-video').onclick = () => openVideoForm();
   byId('btn-sync').onclick = () => loadData();
+  byId('btn-tema').onclick = alternarTema;
 
   byId('canal-form').onsubmit = upsertCanal;
   byId('video-form').onsubmit = upsertVideo;
@@ -1370,8 +1397,11 @@ async function init() {
   }
   if (USA_API_LOCAL) {
     document.title = '[LOCAL] ' + document.title;
-    const sub = document.querySelector('.header p');
-    if (sub) sub.innerHTML = '<span class="badge em_producao">MODO LOCAL</span> banco de testes — nada aqui vai para a nuvem';
+    const selo = byId('modo-local');
+    if (selo) {
+      selo.classList.remove('hide');
+      selo.title = 'Banco de testes local — nada aqui vai para a nuvem';
+    }
   }
 }
 
