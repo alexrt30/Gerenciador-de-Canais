@@ -32,8 +32,8 @@ O navegador nunca fala direto com o banco: toda chamada passa pelo Worker, que e
 A chave fica guardada só no navegador de quem usa (pedida na primeira vez) e **não** vai para o código.
 
 ### Estrutura
-- `worker/src/index.js` — API (`GET /api/data`, `PUT/DELETE /api/canais/:id`, `PUT/DELETE /api/videos/:id`, `POST /api/import`)
-- `worker/migrations/0001_inicial.sql` — tabelas `canais` e `videos`
+- `worker/src/index.js` — API (`GET /api/data`, `PUT/DELETE /api/canais/:id`, `PUT/DELETE /api/videos/:id`, `PUT/DELETE /api/recursos/:id`, `POST /api/import`)
+- `worker/migrations/` — tabelas `canais`, `videos` e `recursos` (biblioteca de prompts, skills e links)
 - `scripts/migrar-planilha.mjs` — copia os dados da planilha Google antiga para o banco
 
 ### Rodar localmente

@@ -31,6 +31,7 @@
           <button class="tab active" data-tab="semana">Semana</button>
           <button class="tab" data-tab="canais">Canais</button>
           <button class="tab" data-tab="planejamento">Produção</button>
+          <button class="tab" data-tab="biblioteca">Biblioteca</button>
           <button class="tab" data-tab="anotacoes">Anotações</button>
           <button class="tab" data-tab="dashboard">Dashboard</button>
         </nav>
@@ -55,6 +56,7 @@
         <div class="actions">
           <button id="btn-novo-canal" class="btn primary">+ Novo canal</button>
           <button id="btn-novo-video" class="btn primary">+ Novo conteúdo</button>
+          <button id="btn-novo-recurso" class="btn primary hide">+ Novo item</button>
         </div>
       </div>
 
@@ -181,6 +183,56 @@
             <button id="delete-video" class="btn danger hide" type="button" style="margin-right:auto;">Excluir</button>
             <button id="cancel-video" class="btn" type="button">Cancelar</button>
             <button id="video-submit" class="btn primary" type="submit">Adicionar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Formulário da biblioteca (janela) -->
+    <div id="recurso-form-card" class="modal-backdrop hide">
+      <div class="card modal" role="dialog" aria-modal="true" aria-labelledby="recurso-form-titulo">
+        <h3 id="recurso-form-titulo">Novo item</h3>
+        <form id="recurso-form" class="form">
+          <div class="form-row">
+            <div class="field" style="flex:2;">
+              <label for="recurso-titulo">Título *</label>
+              <input id="recurso-titulo" required placeholder="Ex.: Prompt de roteiro para Shorts">
+            </div>
+            <div class="field" style="flex:1;">
+              <label for="recurso-tipo">Tipo</label>
+              <select id="recurso-tipo"></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field" style="flex:1;">
+              <label for="recurso-canal">Canal</label>
+              <select id="recurso-canal"></select>
+            </div>
+            <div class="field" style="flex:2;">
+              <label for="recurso-url">Link</label>
+              <input id="recurso-url" type="url" placeholder="https://...">
+            </div>
+          </div>
+          <div class="field">
+            <label for="recurso-conteudo">Conteúdo <span class="muted" style="font-weight:400;">— texto do prompt, instruções, observações</span></label>
+            <textarea id="recurso-conteudo" rows="10" class="mono" placeholder="Cole aqui o prompt ou o texto que quer guardar..."></textarea>
+          </div>
+          <div class="form-row">
+            <div class="field" style="flex:1;">
+              <label for="recurso-tags">Etiquetas <span class="muted" style="font-weight:400;">— separadas por vírgula</span></label>
+              <input id="recurso-tags" placeholder="roteiro, thumbnail, títulos">
+            </div>
+            <div class="field field-inline">
+              <label class="check-inline" for="recurso-favorito">
+                <input id="recurso-favorito" type="checkbox">
+                <span>★ Favorito</span>
+              </label>
+            </div>
+          </div>
+          <div class="actions modal-actions">
+            <button id="delete-recurso" class="btn danger hide" type="button" style="margin-right:auto;">Excluir</button>
+            <button id="cancel-recurso" class="btn" type="button">Cancelar</button>
+            <button id="recurso-submit" class="btn primary" type="submit">Salvar</button>
           </div>
         </form>
       </div>

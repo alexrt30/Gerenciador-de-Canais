@@ -6,11 +6,14 @@
 //   DELETE /api/canais/:id        -> apaga canal (e os vídeos dele)
 //   PUT    /api/videos/:id        -> cria/atualiza vídeo
 //   DELETE /api/videos/:id        -> apaga vídeo
+//   PUT    /api/recursos/:id      -> cria/atualiza item da biblioteca
+//   DELETE /api/recursos/:id      -> apaga item da biblioteca
 //   POST   /api/import            -> { canais, videos } em lote (migração)
 
 const STATUS = ['planejado', 'em_producao', 'pronto', 'publicado'];
 const CHECKS = ['roteiro', 'gravacao', 'edicao', 'thumbnail', 'publicado'];
 const TIPOS = ['short', 'longo', 'live', 'post'];
+const TIPOS_RECURSO = ['prompt', 'skill', 'link', 'referencia', 'outro'];
 const MAX_TEXT = 20000;
 
 export default {
@@ -46,27 +49,27 @@ export default {
         return json({ ok: true, ...result }, 200, cors);
       }
 
-      if ((resource === 'canais' || resource === 'videos') && id) {
+      if (['canais', 'videos', 'recursos'].includes(resource) && id) {
         if (!isValidId(id)) return json({ ok: false, error: 'id inválido' }, 400, cors);
 
         if (request.method === 'PUT') {
           const body = await readJson(request);
-          const saved = resource === 'canais'
-            ? await upsertCanal(env.DB, { ...body, id })
-            : await upsertVideo(env.DB, { ...body, id });
+          const upsert = { canais: upsertCanal, videos: upsertVideo, recursos: upsertRecurso }[resource];
+          const saved = await upsert(env.DB, { ...body, id });
           return json({ ok: true, item: saved }, 200, cors);
         }
 
         if (request.method === 'DELETE') {
-          const table = resource === 'canais' ? 'canais' : 'videos';
-          if (table === 'canais') {
-            // Garante a remoção dos vídeos mesmo se foreign_keys estiver desligado.
+          if (resource === 'canais') {
+            // Garante o efeito mesmo se foreign_keys estiver desligado.
             await env.DB.batch([
               env.DB.prepare('DELETE FROM videos WHERE canal_id = ?').bind(id),
+              env.DB.prepare('UPDATE recursos SET canal_id = NULL WHERE canal_id = ?').bind(id),
               env.DB.prepare('DELETE FROM canais WHERE id = ?').bind(id)
             ]);
           } else {
-            await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
+            const table = resource === 'videos' ? 'videos' : 'recursos';
+            await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
           }
           return json({ ok: true }, 200, cors);
         }
@@ -241,6 +244,29 @@ function cleanVideo(input) {
   return video;
 }
 
+function cleanRecurso(input) {
+  if (!isValidId(String(input?.id || ''))) throw new HttpError(400, 'id de recurso inválido');
+  const tipo = String(input.tipo || 'prompt');
+  if (!TIPOS_RECURSO.includes(tipo)) throw new HttpError(400, 'tipo de recurso inválido');
+  const canalId = text(input.canalId, 'canalId', { max: 64 });
+  const tags = text(input.tags, 'tags', { max: 500 })
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t, i, arr) => arr.indexOf(t) === i)
+    .join(', ');
+  return {
+    id: String(input.id),
+    tipo,
+    titulo: text(input.titulo, 'titulo', { required: true, max: 300 }),
+    conteudo: text(input.conteudo, 'conteudo', { max: 100000 }),
+    url: httpUrl(input.url, 'url'),
+    tags,
+    canalId: canalId || null,
+    favorito: bool(input.favorito)
+  };
+}
+
 // ---------- SQL ----------
 
 const UPSERT_CANAL = `
@@ -289,6 +315,27 @@ async function upsertVideo(db, input) {
   return video;
 }
 
+const UPSERT_RECURSO = `
+  INSERT INTO recursos (id, tipo, titulo, conteudo, url, tags, canal_id, favorito)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+  ON CONFLICT(id) DO UPDATE SET
+    tipo = excluded.tipo, titulo = excluded.titulo, conteudo = excluded.conteudo,
+    url = excluded.url, tags = excluded.tags, canal_id = excluded.canal_id,
+    favorito = excluded.favorito,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
+
+async function upsertRecurso(db, input) {
+  const r = cleanRecurso(input);
+  if (r.canalId) {
+    const canal = await db.prepare('SELECT 1 FROM canais WHERE id = ?').bind(r.canalId).first();
+    if (!canal) throw new HttpError(400, 'Canal do recurso não existe');
+  }
+  await db.prepare(UPSERT_RECURSO)
+    .bind(r.id, r.tipo, r.titulo, r.conteudo, r.url, r.tags, r.canalId, r.favorito)
+    .run();
+  return r;
+}
+
 async function importAll(db, body) {
   const canais = (Array.isArray(body?.canais) ? body.canais : []).map(cleanCanal);
   const ids = new Set(canais.map((c) => c.id));
@@ -309,9 +356,10 @@ async function importAll(db, body) {
 }
 
 async function exportAll(db) {
-  const [canais, videos] = await db.batch([
+  const [canais, videos, recursos] = await db.batch([
     db.prepare('SELECT * FROM canais ORDER BY nome COLLATE NOCASE'),
-    db.prepare('SELECT * FROM videos ORDER BY data_publicacao, titulo COLLATE NOCASE')
+    db.prepare('SELECT * FROM videos ORDER BY data_publicacao, titulo COLLATE NOCASE'),
+    db.prepare('SELECT * FROM recursos ORDER BY favorito DESC, updated_at DESC')
   ]);
   return {
     canais: canais.results.map((c) => ({
@@ -340,6 +388,18 @@ async function exportAll(db) {
       url: v.url,
       notas: v.notas,
       updatedAt: v.updated_at
+    })),
+    recursos: recursos.results.map((r) => ({
+      id: r.id,
+      tipo: r.tipo,
+      titulo: r.titulo,
+      conteudo: r.conteudo,
+      url: r.url,
+      tags: r.tags,
+      canalId: r.canal_id || '',
+      favorito: Boolean(r.favorito),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
     }))
   };
 }

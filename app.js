@@ -36,6 +36,14 @@ const CHECKLIST = [
   ['publicado', 'Publicado']
 ];
 
+const TIPOS_RECURSO = {
+  prompt: 'Prompt',
+  skill: 'Skill',
+  link: 'Link',
+  referencia: 'Referência',
+  outro: 'Outro'
+};
+
 const PALETA = ['#dc2626', '#2563eb', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#db2777', '#65a30d'];
 const DIAS_SEMANA = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 
@@ -125,9 +133,16 @@ const state = {
   // Dashboard / anotações
   showAnotacaoForm: false,
   anotacaoEditing: null,
+  // Biblioteca
+  bibliotecaTipo: '',
+  bibliotecaBusca: '',
+  bibliotecaTag: '',
+  editingRecursoId: null,
+  showRecursoForm: false,
   // Dados
   canais: [],
   videos: [],
+  recursos: [],
   // Interface
   syncMessage: '',
   showSyncMessage: false,
@@ -193,7 +208,7 @@ async function apiRequest(method, path, body) {
 
 function saveCache() {
   try {
-    localStorage.setItem(CACHE_STORAGE, JSON.stringify({ canais: state.canais, videos: state.videos }));
+    localStorage.setItem(CACHE_STORAGE, JSON.stringify({ canais: state.canais, videos: state.videos, recursos: state.recursos }));
   } catch {
     /* sem espaço / modo privado */
   }
@@ -224,6 +239,18 @@ function applyData(data) {
     descricao: String(canal.descricao || ''),
     cor: safeColor(canal.cor),
     anotacoes: serializeCanalNotes(parseCanalNotes(canal.anotacoes))
+  }));
+
+  state.recursos = (Array.isArray(data?.recursos) ? data.recursos : []).map((r) => ({
+    id: String(r.id),
+    tipo: TIPOS_RECURSO[r.tipo] ? String(r.tipo) : 'outro',
+    titulo: String(r.titulo || ''),
+    conteudo: String(r.conteudo || ''),
+    url: String(r.url || ''),
+    tags: String(r.tags || ''),
+    canalId: String(r.canalId || ''),
+    favorito: Boolean(r.favorito),
+    updatedAt: String(r.updatedAt || '')
   }));
 
   state.videos = incomingVideos.map((video) => {
@@ -308,6 +335,12 @@ function saveVideo(videoId, okMessage) {
 
 let toastTimer = null;
 let toastUltimaMsg = '';
+
+function saveRecurso(recursoId, okMessage) {
+  const recurso = state.recursos.find((r) => r.id === recursoId);
+  if (!recurso) return Promise.resolve(false);
+  return persist('PUT', `/api/recursos/${encodeURIComponent(recursoId)}`, recurso, okMessage);
+}
 
 function renderSyncStatus() {
   const statusEl = byId('sync-status');
@@ -619,6 +652,7 @@ function deleteCanal(id) {
   if (!confirm(`Excluir o canal "${canalNome(id)}" e ${total} conteúdo(s) dele?`)) return;
   state.canais = state.canais.filter((c) => c.id !== id);
   state.videos = state.videos.filter((v) => v.canalId !== id);
+  state.recursos = state.recursos.map((r) => (r.canalId === id ? { ...r, canalId: '' } : r));
   if (state.canalAtivo === id) setCanalAtivo('');
   render();
   persist('DELETE', `/api/canais/${encodeURIComponent(id)}`, undefined, 'Canal excluído.');
@@ -1054,6 +1088,189 @@ function htmlPlanejamento() {
   `;
 }
 
+// ---------- Aba: Biblioteca ----------
+
+function parseTags(tags) {
+  return String(tags || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// Com um canal escolhido: itens daquele canal + itens gerais.
+function recursosVisiveis() {
+  return state.recursos.filter((r) => !state.canalAtivo || !r.canalId || r.canalId === state.canalAtivo);
+}
+
+function recursosFiltrados() {
+  const q = state.bibliotecaBusca.toLowerCase().trim();
+  return recursosVisiveis()
+    .filter((r) => !state.bibliotecaTipo || r.tipo === state.bibliotecaTipo)
+    .filter((r) => !state.bibliotecaTag || parseTags(r.tags).includes(state.bibliotecaTag))
+    .filter((r) => !q || [r.titulo, r.conteudo, r.url, r.tags].some((t) => t.toLowerCase().includes(q)))
+    .sort((a, b) => (b.favorito - a.favorito) || b.updatedAt.localeCompare(a.updatedAt) || a.titulo.localeCompare(b.titulo, 'pt-BR'));
+}
+
+function dominio(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function htmlRecurso(r) {
+  const link = safeUrl(r.url);
+  const tags = parseTags(r.tags);
+  const copiavel = r.conteudo || link;
+  return `
+    <div class="recurso" style="--c:${r.canalId ? canalCor(r.canalId) : 'var(--faint)'}" data-action="edit-recurso" data-id="${esc(r.id)}">
+      <div class="recurso-top">
+        <span class="rtipo rtipo-${esc(r.tipo)}">${esc(TIPOS_RECURSO[r.tipo] || r.tipo)}</span>
+        <span class="recurso-canal">${r.canalId ? `<i class="dot"></i>${esc(canalNome(r.canalId))}` : 'Geral'}</span>
+        <button class="star ${r.favorito ? 'on' : ''}" data-action="fav-recurso" data-id="${esc(r.id)}"
+                title="${r.favorito ? 'Tirar dos favoritos' : 'Favoritar'}" aria-pressed="${r.favorito}">★</button>
+      </div>
+      <div class="recurso-titulo">${esc(r.titulo)}</div>
+      ${r.conteudo ? `<pre class="recurso-preview">${esc(r.conteudo)}</pre>` : ''}
+      ${link ? `<a class="recurso-link" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-stop="1">${esc(dominio(link) || link)} ↗</a>` : ''}
+      ${tags.length ? `<div class="recurso-tags">${tags.map((t) => `<button class="tag ${state.bibliotecaTag === t ? 'active' : ''}" data-action="tag-recurso" data-value="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
+      <div class="recurso-actions">
+        ${copiavel ? `<button class="btn mini" data-action="copiar-recurso" data-id="${esc(r.id)}">Copiar ${r.conteudo ? (r.tipo === 'prompt' ? 'prompt' : 'texto') : 'link'}</button>` : ''}
+        ${link ? `<a class="btn mini" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-stop="1">Abrir ↗</a>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function htmlBibliotecaLista() {
+  const lista = recursosFiltrados();
+  if (!state.recursos.length) {
+    return `<div class="card empty">
+      <p style="margin:0 0 6px;"><strong>Sua biblioteca está vazia.</strong></p>
+      <p style="margin:0 0 14px;">Guarde aqui prompts, links de skills, referências de vídeos e o que mais usar com frequência.</p>
+      <button class="btn primary" data-action="novo-recurso">+ Novo item</button>
+    </div>`;
+  }
+  if (!lista.length) return '<div class="card empty">Nada encontrado com esses filtros.</div>';
+  return `<div class="recurso-grid">${lista.map(htmlRecurso).join('')}</div>`;
+}
+
+function htmlBiblioteca() {
+  const visiveis = recursosVisiveis();
+  const contagem = (tipo) => visiveis.filter((r) => r.tipo === tipo).length;
+  const chips = [['', `Todos ${visiveis.length}`], ...Object.entries(TIPOS_RECURSO).map(([k, l]) => [k, `${l} ${contagem(k)}`])];
+  const todasTags = [...new Set(visiveis.flatMap((r) => parseTags(r.tags)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  return `
+    <div class="biblioteca-toolbar">
+      <input id="biblioteca-busca" class="busca" type="search" placeholder="Buscar em títulos, prompts, links e etiquetas..." value="${esc(state.bibliotecaBusca)}" autocomplete="off">
+      <div class="chips">${chips.map(([k, label]) => `<button class="chip ${state.bibliotecaTipo === k ? 'active' : ''}" data-action="biblioteca-tipo" data-value="${k}">${esc(label)}</button>`).join('')}</div>
+    </div>
+    ${todasTags.length ? `<div class="recurso-tags tags-filtro">${todasTags.map((t) => `<button class="tag ${state.bibliotecaTag === t ? 'active' : ''}" data-action="tag-recurso" data-value="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
+    ${state.canalAtivo ? `<p class="muted" style="margin:0 0 12px; font-size:13px;">Mostrando itens de <strong>${esc(canalNome(state.canalAtivo))}</strong> e itens gerais.</p>` : ''}
+    <div id="biblioteca-lista">${htmlBibliotecaLista()}</div>
+  `;
+}
+
+function openRecursoForm(recursoId = null) {
+  const r = recursoId ? state.recursos.find((x) => x.id === recursoId) : null;
+  state.editingRecursoId = r ? r.id : null;
+  state.showRecursoForm = true;
+  byId('recurso-tipo').innerHTML = Object.entries(TIPOS_RECURSO)
+    .map(([k, l]) => `<option value="${k}" ${k === (r?.tipo || state.bibliotecaTipo || 'prompt') ? 'selected' : ''}>${esc(l)}</option>`)
+    .join('');
+  byId('recurso-canal').innerHTML = optionsCanais(r ? r.canalId : state.canalAtivo, 'Geral (todos os canais)');
+  byId('recurso-titulo').value = r?.titulo || '';
+  byId('recurso-url').value = r?.url || '';
+  byId('recurso-conteudo').value = r?.conteudo || '';
+  byId('recurso-tags').value = r?.tags || '';
+  byId('recurso-favorito').checked = Boolean(r?.favorito);
+  byId('recurso-form-titulo').textContent = r ? 'Editar item' : 'Novo item';
+  byId('delete-recurso').classList.toggle('hide', !r);
+  render();
+  setTimeout(() => byId('recurso-titulo').focus(), 0);
+}
+
+function closeRecursoForm() {
+  state.showRecursoForm = false;
+  state.editingRecursoId = null;
+  render();
+}
+
+function upsertRecurso(e) {
+  e.preventDefault();
+  const dados = {
+    tipo: byId('recurso-tipo').value || 'prompt',
+    titulo: byId('recurso-titulo').value.trim(),
+    canalId: byId('recurso-canal').value || '',
+    url: byId('recurso-url').value.trim(),
+    conteudo: byId('recurso-conteudo').value.replace(/\s+$/, ''),
+    tags: parseTags(byId('recurso-tags').value).join(', '),
+    favorito: byId('recurso-favorito').checked,
+    updatedAt: new Date().toISOString()
+  };
+  if (!dados.titulo) return;
+
+  const id = state.editingRecursoId || uid();
+  if (state.editingRecursoId) {
+    state.recursos = state.recursos.map((r) => (r.id === id ? { ...r, ...dados } : r));
+  } else {
+    state.recursos.unshift({ id, ...dados });
+  }
+  closeRecursoForm();
+  saveRecurso(id, 'Item salvo na biblioteca.');
+}
+
+function deleteRecurso(id) {
+  const r = state.recursos.find((x) => x.id === id);
+  if (!r || !confirm(`Excluir "${r.titulo}" da biblioteca?`)) return;
+  state.recursos = state.recursos.filter((x) => x.id !== id);
+  state.showRecursoForm = false;
+  state.editingRecursoId = null;
+  render();
+  persist('DELETE', `/api/recursos/${encodeURIComponent(id)}`, undefined, 'Item excluído.');
+}
+
+function toggleFavorito(id) {
+  state.recursos = state.recursos.map((r) => (r.id === id ? { ...r, favorito: !r.favorito } : r));
+  render();
+  saveRecurso(id, 'Favoritos atualizados.');
+}
+
+async function copiarTexto(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+    return true;
+  } catch {
+    // Alternativa para navegadores sem acesso à área de transferência.
+    const area = document.createElement('textarea');
+    area.value = texto;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  }
+}
+
+async function copiarRecurso(id, botao) {
+  const r = state.recursos.find((x) => x.id === id);
+  if (!r) return;
+  const ok = await copiarTexto(r.conteudo || safeUrl(r.url));
+  if (botao) {
+    const original = botao.textContent;
+    botao.textContent = ok ? 'Copiado ✓' : 'Não deu para copiar';
+    botao.classList.toggle('ok', ok);
+    setTimeout(() => {
+      botao.textContent = original;
+      botao.classList.remove('ok');
+    }, 1500);
+  }
+}
+
 // ---------- Aba: Anotações ----------
 
 function htmlAnotacoes() {
@@ -1209,6 +1426,7 @@ const TITULOS_ABA = {
   canais: 'Canais',
   planejamento: 'Produção',
   anotacoes: 'Anotações',
+  biblioteca: 'Biblioteca',
   dashboard: 'Dashboard'
 };
 
@@ -1225,12 +1443,14 @@ function render() {
   document.querySelector('.page-head').classList.toggle('hide', Boolean(abrindoCanal));
   byId('canal-form-card').classList.toggle('hide', !state.showCanalForm);
   byId('video-form-card').classList.toggle('hide', !state.showVideoForm);
-  document.body.classList.toggle('modal-open', state.showCanalForm || state.showVideoForm);
+  byId('recurso-form-card').classList.toggle('hide', !state.showRecursoForm);
+  document.body.classList.toggle('modal-open', state.showCanalForm || state.showVideoForm || state.showRecursoForm);
 
   byId('search-wrap').classList.toggle('hide', state.tab !== 'planejamento');
   byId('btn-novo-canal').classList.toggle('hide', state.tab !== 'canais' || Boolean(abrindoCanal));
   byId('btn-novo-video').classList.toggle('hide', !['semana', 'planejamento'].includes(state.tab));
   byId('btn-novo-video').disabled = !state.canais.length;
+  byId('btn-novo-recurso').classList.toggle('hide', state.tab !== 'biblioteca');
 
   const content = byId('content');
   if (state.tab === 'semana') content.innerHTML = htmlSemana();
@@ -1238,6 +1458,14 @@ function render() {
   if (state.tab === 'anotacoes') content.innerHTML = htmlAnotacoes();
   if (state.tab === 'planejamento') content.innerHTML = htmlPlanejamento();
   if (state.tab === 'dashboard') content.innerHTML = htmlDashboard();
+  if (state.tab === 'biblioteca') {
+    content.innerHTML = htmlBiblioteca();
+    // A busca atualiza só a lista, para não perder o foco do campo.
+    byId('biblioteca-busca').oninput = (e) => {
+      state.bibliotecaBusca = e.target.value;
+      byId('biblioteca-lista').innerHTML = htmlBibliotecaLista();
+    };
+  }
 
 
   if (state.tab === 'planejamento') {
@@ -1274,6 +1502,13 @@ function bindEvents() {
   byId('cancel-canal').onclick = closeCanalForm;
   byId('cancel-video').onclick = closeVideoForm;
   byId('delete-video').onclick = () => deleteVideo(state.editingVideoId);
+  byId('btn-novo-recurso').onclick = () => openRecursoForm();
+  byId('recurso-form').onsubmit = upsertRecurso;
+  byId('cancel-recurso').onclick = closeRecursoForm;
+  byId('delete-recurso').onclick = () => deleteRecurso(state.editingRecursoId);
+  byId('recurso-form-card').addEventListener('mousedown', (e) => {
+    if (e.target.id === 'recurso-form-card') closeRecursoForm();
+  });
 
   // Fecha a janela clicando fora ou com Esc.
   byId('canal-form-card').addEventListener('mousedown', (e) => {
@@ -1286,6 +1521,7 @@ function bindEvents() {
     if (e.key !== 'Escape') return;
     if (state.showVideoForm) closeVideoForm();
     else if (state.showCanalForm) closeCanalForm();
+    else if (state.showRecursoForm) closeRecursoForm();
   });
 
   byId('key-form').onsubmit = (e) => {
@@ -1335,6 +1571,12 @@ function bindEvents() {
 
     switch (action) {
       case 'edit-video': return openVideoForm(id);
+      case 'novo-recurso': return openRecursoForm();
+      case 'edit-recurso': return openRecursoForm(id);
+      case 'fav-recurso': return toggleFavorito(id);
+      case 'copiar-recurso': return copiarRecurso(id, el);
+      case 'biblioteca-tipo': state.bibliotecaTipo = value; return render();
+      case 'tag-recurso': state.bibliotecaTag = state.bibliotecaTag === value ? '' : value; return render();
       case 'mark-published': return marcarPublicado(id);
       case 'novo-no-dia': return openVideoForm(null, { dataPublicacao: dia });
       case 'novo-no-canal': return openVideoForm(null, { canalId: id });
