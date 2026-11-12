@@ -135,7 +135,7 @@ const state = {
   showAnotacaoForm: false,
   anotacaoEditing: null,
   // Biblioteca
-  bibliotecaTipo: '',
+  bibliotecaTipo: 'fav', // abre mostrando os favoritos
   bibliotecaBusca: '',
   bibliotecaTag: '',
   editingRecursoId: null,
@@ -1207,10 +1207,17 @@ function recursosVisiveis() {
   return state.recursos.filter((r) => !state.canalAtivo || !r.canalId || r.canalId === state.canalAtivo);
 }
 
+// "fav" sem nenhum favorito cai para "Todos", para a lista não abrir vazia.
+function filtroBiblioteca() {
+  if (state.bibliotecaTipo === 'fav' && !recursosVisiveis().some((r) => r.favorito)) return '';
+  return state.bibliotecaTipo;
+}
+
 function recursosFiltrados() {
   const q = state.bibliotecaBusca.toLowerCase().trim();
+  const filtro = filtroBiblioteca();
   return recursosVisiveis()
-    .filter((r) => !state.bibliotecaTipo || r.tipo === state.bibliotecaTipo)
+    .filter((r) => !filtro || (filtro === 'fav' ? r.favorito : r.tipo === filtro))
     .filter((r) => !state.bibliotecaTag || parseTags(r.tags).includes(state.bibliotecaTag))
     .filter((r) => !q || [r.titulo, r.conteudo, r.url, r.tags].some((t) => t.toLowerCase().includes(q)))
     .sort((a, b) => (b.favorito - a.favorito) || b.updatedAt.localeCompare(a.updatedAt) || a.titulo.localeCompare(b.titulo, 'pt-BR'));
@@ -1264,13 +1271,14 @@ function htmlBibliotecaLista() {
 function htmlBiblioteca() {
   const visiveis = recursosVisiveis();
   const contagem = (tipo) => visiveis.filter((r) => r.tipo === tipo).length;
-  const chips = [['', `Todos ${visiveis.length}`], ...Object.entries(TIPOS_RECURSO).map(([k, l]) => [k, `${l} ${contagem(k)}`])];
+  const filtro = filtroBiblioteca();
+  const chips = [['fav', `★ Favoritos ${visiveis.filter((r) => r.favorito).length}`], ['', `Todos ${visiveis.length}`], ...Object.entries(TIPOS_RECURSO).map(([k, l]) => [k, `${l} ${contagem(k)}`])];
   const todasTags = [...new Set(visiveis.flatMap((r) => parseTags(r.tags)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
   return `
     <div class="biblioteca-toolbar">
       <input id="biblioteca-busca" class="busca" type="search" placeholder="Buscar em títulos, prompts, links e etiquetas..." value="${esc(state.bibliotecaBusca)}" autocomplete="off">
-      <div class="chips">${chips.map(([k, label]) => `<button class="chip ${state.bibliotecaTipo === k ? 'active' : ''}" data-action="biblioteca-tipo" data-value="${k}">${esc(label)}</button>`).join('')}</div>
+      <div class="chips">${chips.map(([k, label]) => `<button class="chip ${filtro === k ? 'active' : ''}${k === 'fav' ? ' chip-fav' : ''}" data-action="biblioteca-tipo" data-value="${k}">${esc(label)}</button>`).join('')}</div>
     </div>
     ${todasTags.length ? `<div class="recurso-tags tags-filtro">${todasTags.map((t) => `<button class="tag ${state.bibliotecaTag === t ? 'active' : ''}" data-action="tag-recurso" data-value="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
     ${state.canalAtivo ? `<p class="muted" style="margin:0 0 12px; font-size:13px;">Mostrando itens de <strong>${esc(canalNome(state.canalAtivo))}</strong> e itens gerais.</p>` : ''}
@@ -1290,7 +1298,7 @@ function openRecursoForm(recursoId = null) {
   byId('recurso-url').value = r?.url || '';
   byId('recurso-conteudo').value = r?.conteudo || '';
   byId('recurso-tags').value = r?.tags || '';
-  byId('recurso-favorito').checked = Boolean(r?.favorito);
+  byId('recurso-favorito').checked = r ? Boolean(r.favorito) : filtroBiblioteca() === 'fav';
   byId('recurso-form-titulo').textContent = r ? 'Editar item' : 'Novo item';
   byId('delete-recurso').classList.toggle('hide', !r);
   render();

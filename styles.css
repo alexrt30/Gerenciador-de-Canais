@@ -1583,3 +1583,9 @@ body.modal-open .topbar {
   .cv-busca { flex: 1; min-width: 0; }
   .cv-grid { grid-template-columns: 1fr; }
 }
+
+/* Chip de favoritos da Biblioteca */
+.chip-fav { color: #d97706; }
+[data-theme="dark"] .chip-fav { color: #fbbf24; }
+.chip-fav.active { color: #b45309; }
+[data-theme="dark"] .chip-fav.active { color: #fcd34d; }
