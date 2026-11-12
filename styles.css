@@ -106,7 +106,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   gap: 24px;
-  height: 56px;
+  height: 64px;
 }
 
 .brand {
@@ -142,8 +142,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .tabs {
   display: flex;
-  gap: 4px;
-  height: 100%;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -151,23 +154,31 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tabs::-webkit-scrollbar { display: none; }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
   border: 0;
+  border-radius: 9px;
   background: none;
   color: var(--muted);
-  padding: 0 10px;
   cursor: pointer;
   font-weight: 500;
   white-space: nowrap;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  transition: color .15s, background .15s;
 }
 
+.tab svg { opacity: .7; flex: none; }
 .tab:hover { color: var(--text); }
 
 .tab.active {
   color: var(--text);
-  border-bottom-color: var(--text);
+  background: var(--surface);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 0 0 1px var(--border);
 }
+.tab.active svg { opacity: 1; color: var(--accent); }
 
 .topbar-actions {
   margin-left: auto;
@@ -204,7 +215,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 0 10px;
+  padding: 0 0 12px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -212,49 +223,82 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .canal-bar::-webkit-scrollbar { display: none; }
 .canal-bar:empty { display: none; }
 
-.canal-bar-label {
-  color: var(--faint);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  margin-right: 4px;
-  flex-shrink: 0;
+.canal-bar-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border-strong);
+  flex: none;
 }
 
 .canal-pill {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex-shrink: 0;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
+  height: 34px;
+  padding: 0 12px 0 4px;
+  border-radius: 99px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--muted);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
 }
 
-.canal-pill:hover { color: var(--text); border-color: var(--border-strong); }
-.canal-pill .dot { margin: 0; }
+.canal-pill:hover { color: var(--text); border-color: color-mix(in srgb, var(--c) 40%, var(--border)); }
+
+.canal-pill-av {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: .02em;
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 15%, var(--surface));
+}
+.canal-pill-av.todos { color: var(--muted); background: var(--surface-2); }
 
 .canal-pill small {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
   font-size: 11px;
-  color: var(--faint);
+  font-weight: 650;
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
   font-variant-numeric: tabular-nums;
 }
 
 .canal-pill.active {
   color: var(--text);
-  border-color: var(--c);
-  background: color-mix(in srgb, var(--c) var(--tint), var(--surface));
   font-weight: 600;
+  border-color: color-mix(in srgb, var(--c) 60%, transparent);
+  background: color-mix(in srgb, var(--c) 10%, var(--surface));
 }
+.canal-pill.active .canal-pill-av { color: #fff; background: var(--c); }
+.canal-pill.active .canal-pill-av.todos { color: var(--surface); background: var(--text); }
 
-.canal-pill.active small { color: var(--text); }
+/* Linha na cor do canal escolhido embaixo da barra do topo. */
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--canal-ativo, transparent);
+  transition: background .2s;
+}
 
 /* ============================================================
    Cabeçalho da página e mensagens
@@ -1362,9 +1406,11 @@ body.modal-open .topbar {
 }
 
 @media (max-width: 720px) {
-  .topbar-inner { flex-wrap: wrap; height: auto; gap: 0 12px; padding-top: 8px; }
-  .tabs { order: 3; width: 100%; height: 42px; }
-  .tab { padding: 0 8px; }
+  .topbar-inner { flex-wrap: wrap; height: auto; gap: 0 12px; padding-top: 10px; }
+  .topbar-actions { margin-bottom: 8px; }
+  .brand { margin-bottom: 8px; }
+  .tabs { order: 3; width: 100%; margin-bottom: 10px; }
+  .tab { padding: 0 10px; }
   .container { padding-top: 16px; }
   .page-head h1 { font-size: 1.25rem; }
   .week, .kanban-board { grid-template-columns: 1fr; }

@@ -1514,16 +1514,21 @@ function renderCanalBar() {
   const daSemana = (canalId) =>
     state.videos.filter((v) => v.canalId === canalId && v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
 
-  const botao = (id, nome, cor, extra) => `
+  const botao = (id, nome, cor, extra) => {
+    const avatar = id
+      ? `<span class="canal-pill-av">${esc(iniciais(nome))}</span>`
+      : '<span class="canal-pill-av todos"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg></span>';
+    const dica = extra !== undefined ? `${nome} · ${extra} conteúdo${extra === 1 ? '' : 's'} nesta semana` : 'Todos os canais';
+    return `
     <button class="canal-pill ${state.canalAtivo === id ? 'active' : ''}" style="--c:${cor}"
-            data-canal="${esc(id)}" aria-pressed="${state.canalAtivo === id}"
-            ${extra !== undefined ? `title="${extra} conteúdo(s) nesta semana"` : ''}>
-      ${id ? '<i class="dot"></i>' : ''}<span>${esc(nome)}</span>${extra !== undefined ? `<small>${extra}</small>` : ''}
+            data-canal="${esc(id)}" aria-pressed="${state.canalAtivo === id}" title="${esc(dica)}">
+      ${avatar}<span class="canal-pill-nome">${esc(nome)}</span>${extra ? `<small>${extra}</small>` : ''}
     </button>`;
+  };
 
   bar.innerHTML = `
-    <span class="canal-bar-label">Canal:</span>
     ${botao('', 'Todos', 'var(--text)')}
+    <span class="canal-bar-sep" aria-hidden="true"></span>
     ${canaisOrdenados().map((c) => botao(c.id, c.nome, canalCor(c.id), daSemana(c.id))).join('')}
   `;
   document.documentElement.style.setProperty('--canal-ativo', state.canalAtivo ? canalCor(state.canalAtivo) : 'transparent');
