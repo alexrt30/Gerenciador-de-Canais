@@ -125,6 +125,10 @@ const state = {
   // Canais
   canalAtivo: localStorage.getItem('gc_canal_ativo') || '', // '' = todos os canais
   canalTipo: '',
+  canalBusca: '',
+  canalVerTodosPub: false,
+  // Blocos da página do canal que o usuário abriu/fechou (lembrado neste navegador).
+  blocosAbertos: JSON.parse(localStorage.getItem('gc_blocos') || '{}'),
   canaisBusca: '',
   // Produção
   search: '',
@@ -374,6 +378,21 @@ function renderSyncStatus() {
   }, erro ? 8000 : 2500);
 }
 
+// Aviso com botão "Desfazer" (some sozinho depois de alguns segundos).
+function avisoDesfazer(mensagem, desfazer) {
+  const statusEl = byId('sync-status');
+  if (!statusEl || !desfazer) return;
+  statusEl.innerHTML = `<span>${esc(mensagem)}</span><button type="button" class="toast-btn">Desfazer</button>`;
+  statusEl.classList.remove('hide', 'erro');
+  toastUltimaMsg = state.syncMessage; // evita que o próximo render troque o aviso
+  statusEl.querySelector('.toast-btn').onclick = () => {
+    statusEl.classList.add('hide');
+    desfazer();
+  };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => statusEl.classList.add('hide'), 6000);
+}
+
 // ---------- Tema claro / escuro ----------
 
 function temaAtual() {
@@ -437,6 +456,8 @@ function canalCor(canalId) {
 function setCanalAtivo(canalId) {
   state.canalAtivo = canalId && canalById(canalId) ? canalId : '';
   state.canalTipo = '';
+  state.canalBusca = '';
+  state.canalVerTodosPub = false;
   localStorage.setItem('gc_canal_ativo', state.canalAtivo);
 }
 
@@ -754,16 +775,34 @@ function upsertVideo(e) {
 function deleteVideo(id) {
   const video = state.videos.find((v) => v.id === id);
   if (!video || !confirm(`Excluir "${video.titulo}"?`)) return;
+  const copia = { ...video };
   state.videos = state.videos.filter((v) => v.id !== id);
   if (state.editingVideoId === id) {
     state.showVideoForm = false;
     state.editingVideoId = null;
   }
   render();
-  persist('DELETE', `/api/videos/${encodeURIComponent(id)}`, undefined, 'Conteúdo excluído.');
+  persist('DELETE', `/api/videos/${encodeURIComponent(id)}`, undefined, 'Conteúdo excluído.').then((ok) => ok && avisoDesfazer('Conteúdo excluído.', () => {
+    state.videos.push(copia);
+    render();
+    saveVideo(copia.id, 'Conteúdo restaurado.');
+  }));
+}
+
+// Guarda a versão anterior do conteúdo para o botão "Desfazer" do aviso.
+function comDesfazer(id) {
+  const antes = state.videos.find((v) => v.id === id);
+  if (!antes) return;
+  const copia = { ...antes };
+  return () => {
+    state.videos = state.videos.map((v) => (v.id === id ? copia : v));
+    render();
+    saveVideo(id, 'Alteração desfeita.');
+  };
 }
 
 function marcarPublicado(id) {
+  const desfazer = comDesfazer(id);
   const hoje = getTodayISO();
   state.videos = state.videos.map((v) =>
     v.id === id
@@ -771,11 +810,34 @@ function marcarPublicado(id) {
       : v
   );
   render();
-  saveVideo(id, 'Marcado como publicado.');
+  saveVideo(id, 'Marcado como publicado.').then((ok) => ok && avisoDesfazer('Marcado como publicado.', desfazer));
+}
+
+// Liga/desliga uma etapa (roteiro, gravação...) direto na linha.
+// Ao começar, sai de "Planejado"; com tudo feito, vira "Pronto".
+function alternarEtapa(id, chave) {
+  if (!ETAPAS_LINHA.some(([k]) => k === chave)) return;
+  state.videos = state.videos.map((v) => {
+    if (v.id !== id) return v;
+    const novo = { ...v, [chave]: !v[chave] };
+    if (!isPublicado(novo)) {
+      const feitas = ETAPAS_LINHA.filter(([k]) => novo[k]).length;
+      if (feitas === ETAPAS_LINHA.length) novo.status = 'pronto';
+      else if (feitas && novo.status === 'planejado') novo.status = 'em_producao';
+      else if (!feitas && novo.status === 'em_producao') novo.status = 'planejado';
+      else if (feitas < ETAPAS_LINHA.length && novo.status === 'pronto') novo.status = 'em_producao';
+    }
+    return novo;
+  });
+  render();
+  const v = state.videos.find((x) => x.id === id);
+  const label = CHECKLIST.find(([k]) => k === chave)?.[1] || chave;
+  saveVideo(id, `${label}: ${v?.[chave] ? 'feito' : 'pendente'}.`);
 }
 
 // Arrastar na Produção: muda o status (e mantém "publicado" em sincronia).
 function moverParaStatus(id, status) {
+  const desfazer = comDesfazer(id);
   const hoje = getTodayISO();
   state.videos = state.videos.map((v) => {
     if (v.id !== id) return v;
@@ -785,13 +847,16 @@ function moverParaStatus(id, status) {
     return { ...v, status, publicado: false };
   });
   render();
-  saveVideo(id, `Movido para "${STATUS[status]}".`);
+  const msg = `Movido para "${STATUS[status]}".`;
+  saveVideo(id, msg).then((ok) => ok && avisoDesfazer(msg, desfazer));
 }
 
 function moverParaData(id, dataPublicacao) {
+  const desfazer = comDesfazer(id);
   state.videos = state.videos.map((v) => (v.id === id ? { ...v, dataPublicacao } : v));
   render();
-  saveVideo(id, `Movido para ${formatDateBR(dataPublicacao)}.`);
+  const msg = `Movido para ${formatDateBR(dataPublicacao)}.`;
+  saveVideo(id, msg).then((ok) => ok && avisoDesfazer(msg, desfazer));
 }
 
 // ---------- Componentes de lista ----------
@@ -1081,58 +1146,161 @@ function htmlCanaisLista() {
   }).join('')}</div>`;
 }
 
+// Nome do dia para os grupos da agenda ("Hoje", "Amanhã", "Sexta").
+function rotuloDia(iso, hoje = getTodayISO()) {
+  const semana = DIAS_SEMANA[(parseISODate(iso).getDay() + 6) % 7];
+  if (iso === hoje) return { nome: 'Hoje', sub: `${semana.toLowerCase()}, ${formatDiaMes(iso)}` };
+  if (iso === addDays(hoje, 1)) return { nome: 'Amanhã', sub: `${semana.toLowerCase()}, ${formatDiaMes(iso)}` };
+  return { nome: semana, sub: formatDiaMes(iso) };
+}
+
+// Etapas que dá para marcar direto na linha (o "publicado" tem botão próprio).
+const ETAPAS_LINHA = CHECKLIST.filter(([k]) => k !== 'publicado');
+
+// Linha compacta da agenda do canal: hora, tipo, título, etapas, status e ação.
+function htmlLinha(video, { mostrarData = false, mostrarCanal = false } = {}) {
+  const publicado = isPublicado(video);
+  const atrasado = isAtrasado(video);
+  const link = safeUrl(video.url);
+  const status = publicado ? 'publicado' : video.status;
+  const quando = mostrarData
+    ? `<span class="linha-data">${esc(video.dataPublicacao ? formatDiaMes(video.dataPublicacao) : 'sem data')}</span>`
+    : '';
+  return `
+    <div class="linha ${publicado ? 'is-publicado' : ''} ${atrasado ? 'is-atrasado' : ''}" style="--c:${canalCor(video.canalId)}"
+         data-action="edit-video" data-id="${esc(video.id)}" tabindex="0" role="button" title="Clique para editar">
+      <span class="linha-quando">${quando}<span class="linha-hora">${esc(video.horario || '--:--')}</span></span>
+      ${htmlTipo(video.tipo)}
+      <span class="linha-titulo">
+        <span title="${esc(video.titulo)}">${esc(video.titulo)}</span>
+        ${mostrarCanal ? `<small><i class="dot"></i>${esc(canalNome(video.canalId))}</small>` : ''}
+      </span>
+      <span class="linha-etapas" role="group" aria-label="Etapas">
+        ${ETAPAS_LINHA.map(([k, label]) => `<button class="etapa ${video[k] ? 'on' : ''}" data-action="toggle-etapa" data-id="${esc(video.id)}" data-value="${k}"
+            title="${esc(label)}: ${video[k] ? 'feito' : 'falta'} (clique para alternar)" aria-pressed="${Boolean(video[k])}">${esc(label[0])}</button>`).join('')}
+      </span>
+      <select class="linha-status st-${esc(status)}" data-action="status-video" data-id="${esc(video.id)}" aria-label="Status">
+        ${Object.entries(STATUS).map(([k, l]) => `<option value="${k}" ${k === status ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+      </select>
+      <span class="linha-acao">
+        ${publicado
+          ? (link ? `<a class="btn mini" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-stop="1" title="Abrir o conteúdo publicado">Abrir ↗</a>` : '')
+          : `<button class="btn mini ok" data-action="mark-published" data-id="${esc(video.id)}" title="Marcar como publicado" aria-label="Marcar como publicado">✓<span class="so-largo"> Postado</span></button>`}
+      </span>
+    </div>
+  `;
+}
+
+function htmlChipsTipo(atual, acao, videos) {
+  const conta = contarPorTipo(videos);
+  const chips = [['', 'Todos', videos.length], ...Object.entries(TIPOS).filter(([k]) => conta[k] || k === atual).map(([k, l]) => [k, l, conta[k]])];
+  return `<div class="chips">${chips
+    .map(([k, label, n]) => `<button class="chip ${atual === k ? 'active' : ''}" data-action="${acao}" data-value="${k}">${esc(label)} <span class="chip-n">${n}</span></button>`)
+    .join('')}</div>`;
+}
+
 function htmlCanalDetalhe(canalId) {
   const canal = canalById(canalId);
   const hoje = getTodayISO();
+  const fimSemana = addDays(startOfWeek(hoje), 6);
   const todos = state.videos.filter((v) => v.canalId === canalId);
-  const videos = todos.filter((v) => !state.canalTipo || v.tipo === state.canalTipo);
+  const q = state.canalBusca.toLowerCase().trim();
+  const videos = todos
+    .filter((v) => !state.canalTipo || v.tipo === state.canalTipo)
+    .filter((v) => !q || v.titulo.toLowerCase().includes(q) || v.notas.toLowerCase().includes(q));
 
   const proximos = videos.filter((v) => !isPublicado(v) && v.dataPublicacao && v.dataPublicacao >= hoje).sort(compareAgenda);
   const atrasados = videos.filter((v) => isAtrasado(v, hoje)).sort(compareAgenda);
   const ideias = videos.filter((v) => !isPublicado(v) && !v.dataPublicacao).sort(compareAgenda);
   const publicados = videos.filter(isPublicado).sort((a, b) => compareAgenda(b, a));
-  const porTipo = contarPorTipo(todos);
   const link = safeUrl(canal.url);
 
-  const secao = (titulo, lista, vazio, opts = {}) => `
-    <div class="card ${opts.alerta ? 'section-alert' : ''}" style="margin-top:12px;">
-      <div class="toolbar" style="margin-bottom:8px;">
-        <h3>${esc(titulo)} <span class="muted">(${lista.length})</span></h3>
-      </div>
-      ${lista.length
-        ? `<div class="item-grid">${lista.map((v) => htmlItem(v, { mostrarData: true, mostrarCanal: false })).join('')}</div>`
-        : `<p class="muted" style="margin:0;">${esc(vazio)}</p>`}
-    </div>
-  `;
+  // Resumo do canal (sempre sobre todos os conteúdos, sem filtro).
+  const pend = todos.filter((v) => !isPublicado(v));
+  const resumo = [
+    ['Atrasados', todos.filter((v) => isAtrasado(v, hoje)).length, 'alerta'],
+    ['Hoje', pend.filter((v) => v.dataPublicacao === hoje).length, ''],
+    ['Até domingo', pend.filter((v) => v.dataPublicacao >= hoje && v.dataPublicacao <= fimSemana).length, ''],
+    ['Planejados', pend.filter((v) => v.status === 'planejado').length, 'st-planejado'],
+    ['Em produção', pend.filter((v) => v.status === 'em_producao').length, 'st-em_producao'],
+    ['Prontos', pend.filter((v) => v.status === 'pronto').length, 'st-pronto'],
+    ['Publicados', todos.length - pend.length, 'st-publicado']
+  ];
+
+  // Próximos agrupados por dia.
+  const dias = [...new Set(proximos.map((v) => v.dataPublicacao))];
+  const agenda = dias.map((dia) => {
+    const lista = proximos.filter((v) => v.dataPublicacao === dia);
+    const r = rotuloDia(dia, hoje);
+    return `
+      <div class="agenda-dia ${dia === hoje ? 'is-hoje' : ''}">
+        <div class="agenda-dia-head">
+          <strong>${esc(r.nome)}</strong><span class="muted">${esc(r.sub)}</span>
+          <span class="agenda-dia-n">${lista.length}</span>
+          <button class="btn mini" data-action="novo-no-dia" data-dia="${dia}" data-id="${esc(canalId)}" title="Novo conteúdo neste dia">+</button>
+        </div>
+        <div class="linhas">${lista.map((v) => htmlLinha(v)).join('')}</div>
+      </div>`;
+  }).join('');
+
+  const LIMITE_PUB = 8;
+  const pubVisiveis = state.canalVerTodosPub ? publicados : publicados.slice(0, LIMITE_PUB);
+  const filtrando = Boolean(state.canalTipo || q);
+
+  const bloco = (id, titulo, n, corpo, { aberto = true, alerta = false, extra = '' } = {}) => `
+    <details class="bloco ${alerta ? 'bloco-alerta' : ''}" data-bloco="${id}" ${(id in state.blocosAbertos ? state.blocosAbertos[id] : aberto) ? 'open' : ''}>
+      <summary><span class="bloco-titulo">${esc(titulo)}</span><span class="bloco-n">${n}</span>${extra}</summary>
+      <div class="bloco-corpo">${corpo}</div>
+    </details>`;
+
+  const vazio = (txt) => `<p class="bloco-vazio">${txt}</p>`;
 
   return `
     <div class="canal-header" style="--c:${canalCor(canalId)}">
-      <button class="btn" data-action="fechar-canal">← Canais</button>
-      <div style="flex:1; min-width:200px;">
-        <h2><i class="dot big"></i>${esc(canal.nome)}</h2>
-        ${canal.nicho ? `<p class="muted" style="margin:2px 0 0;">${esc(canal.nicho)}</p>` : ''}
+      <button class="btn" data-action="fechar-canal" title="Voltar para todos os canais">← Canais</button>
+      <span class="cv-avatar">${esc(iniciais(canal.nome))}</span>
+      <div class="canal-header-nome">
+        <h2>${esc(canal.nome)}</h2>
+        <p class="muted">${[canal.nicho, canal.descricao].filter(Boolean).map(esc).join(' · ') || `${todos.length} conteúdo${todos.length === 1 ? '' : 's'}`}</p>
       </div>
       <div class="actions">
         ${link ? `<a class="btn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">YouTube ↗</a>` : ''}
         <button class="btn" data-action="edit-canal" data-id="${esc(canalId)}">Editar canal</button>
-        <button class="btn primary" data-action="novo-no-canal" data-id="${esc(canalId)}">Novo conteúdo</button>
+        <button class="btn primary" data-action="novo-no-canal" data-id="${esc(canalId)}" title="Atalho: tecla N">+ Novo conteúdo</button>
       </div>
     </div>
-    ${canal.descricao ? `<p class="muted">${esc(canal.descricao)}</p>` : ''}
 
-    <div class="kpi" style="margin:12px 0;">
-      ${Object.entries(TIPOS).map(([k, label]) => {
-        const lista = todos.filter((v) => v.tipo === k);
-        return `<div class="card"><p class="muted">${esc(label)}</p><strong>${lista.filter(isPublicado).length}</strong><span class="muted"> / ${lista.length} publicados</span></div>`;
-      }).join('')}
+    <div class="resumo-canal">
+      ${resumo.map(([label, n, cls]) => `<div class="resumo-item ${cls} ${cls === 'alerta' && n ? 'tem' : ''} ${n ? '' : 'zero'}"><strong>${n}</strong><span>${esc(label)}</span></div>`).join('')}
     </div>
 
-    ${htmlFiltroChips(state.canalTipo, 'canal-tipo')}
-    ${atrasados.length ? secao('Atrasados', atrasados, '', { alerta: true }) : ''}
-    ${secao('Próximos', proximos, 'Nada agendado. Use "Novo conteúdo" ou dê data a uma ideia.')}
-    ${secao('Ideias sem data', ideias, 'Nenhuma ideia guardada.')}
-    ${secao('Publicados', publicados, 'Nada publicado ainda.')}
-    <p class="muted" style="margin-top:12px;">Total no canal: ${todos.length} · ${Object.entries(porTipo).filter(([, n]) => n).map(([k, n]) => `${esc(TIPOS[k])}: ${n}`).join(' · ') || 'sem conteúdos'}</p>
+    <div class="canal-filtros">
+      ${htmlChipsTipo(state.canalTipo, 'canal-tipo', todos)}
+      <label class="cv-busca">
+        ${ICO.busca}
+        <input id="canal-busca" type="search" placeholder="Buscar neste canal" value="${esc(state.canalBusca)}" autocomplete="off">
+      </label>
+    </div>
+
+    ${atrasados.length ? bloco('atrasados', 'Atrasados', atrasados.length,
+      `<p class="bloco-dica">Tinham data para sair e ainda não foram publicados.</p><div class="linhas">${atrasados.map((v) => htmlLinha(v, { mostrarData: true })).join('')}</div>`,
+      { alerta: true }) : ''}
+
+    ${bloco('proximos', 'Próximos', proximos.length,
+      agenda || vazio(filtrando ? 'Nada com esses filtros.' : 'Nada agendado. Use “+ Novo conteúdo” ou dê data a uma ideia.'))}
+
+    ${bloco('ideias', 'Ideias sem data', ideias.length,
+      ideias.length ? `<div class="linhas">${ideias.map((v) => htmlLinha(v)).join('')}</div>` : vazio('Nenhuma ideia guardada.'),
+      { aberto: ideias.length > 0 })}
+
+    ${bloco('publicados', 'Publicados', publicados.length,
+      publicados.length
+        ? `<div class="linhas">${pubVisiveis.map((v) => htmlLinha(v, { mostrarData: true })).join('')}</div>
+           ${publicados.length > LIMITE_PUB ? `<button class="btn mini ver-mais" data-action="ver-todos-pub">${state.canalVerTodosPub ? 'Mostrar menos' : `Ver todos (${publicados.length})`}</button>` : ''}`
+        : vazio('Nada publicado ainda.'),
+      { aberto: false })}
+
+    <p class="muted dica">Dicas: clique numa linha para editar · as letras R G E T marcam Roteiro, Gravação, Edição e Thumbnail · tecla <kbd>N</kbd> cria conteúdo, <kbd>/</kbd> busca.</p>
   `;
 }
 
@@ -1579,6 +1747,15 @@ function render() {
       state.canaisBusca = e.target.value;
       byId('canais-lista').innerHTML = htmlCanaisLista();
     };
+    const buscaCanal = byId('canal-busca');
+    if (buscaCanal) buscaCanal.oninput = (e) => {
+      state.canalBusca = e.target.value;
+      const pos = e.target.selectionStart;
+      render();
+      const novo = byId('canal-busca');
+      novo.focus();
+      novo.setSelectionRange(pos, pos);
+    };
   }
   if (state.tab === 'anotacoes') content.innerHTML = htmlAnotacoes();
   if (state.tab === 'planejamento') content.innerHTML = htmlPlanejamento();
@@ -1642,6 +1819,30 @@ function bindEvents() {
   byId('video-form-card').addEventListener('mousedown', (e) => {
     if (e.target.id === 'video-form-card') closeVideoForm();
   });
+  // Atalhos: N = novo conteúdo, / = busca da tela, Ctrl/⌘+Enter = salvar a janela aberta.
+  document.addEventListener('keydown', (e) => {
+    const algumaJanela = state.showVideoForm || state.showCanalForm || state.showRecursoForm;
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && algumaJanela) {
+      e.preventDefault();
+      const form = state.showVideoForm ? 'video-form' : state.showCanalForm ? 'canal-form' : 'recurso-form';
+      byId(form).requestSubmit();
+      return;
+    }
+    const digitando = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (digitando || algumaJanela || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      if (state.tab === 'biblioteca') openRecursoForm();
+      else if (state.canais.length) openVideoForm();
+    } else if (e.key === '/') {
+      const campo = byId('canal-busca') || byId('canais-busca') || byId('biblioteca-busca') || (state.tab === 'planejamento' && byId('search'));
+      if (campo) {
+        e.preventDefault();
+        campo.focus();
+      }
+    }
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (state.showVideoForm) closeVideoForm();
@@ -1692,9 +1893,23 @@ function bindEvents() {
 
   const content = byId('content');
 
-  // Enter/espaço no card do canal abre o canal.
+  // Status trocado direto na linha.
+  content.addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-action="status-video"]');
+    if (sel) moverParaStatus(sel.dataset.id, sel.value);
+  });
+
+  // Lembra quais blocos (Ideias, Publicados...) ficaram abertos.
+  content.addEventListener('toggle', (e) => {
+    const bloco = e.target.dataset?.bloco;
+    if (!bloco) return;
+    state.blocosAbertos[bloco] = e.target.open;
+    localStorage.setItem('gc_blocos', JSON.stringify(state.blocosAbertos));
+  }, true);
+
+  // Enter/espaço no card do canal ou numa linha abre.
   content.addEventListener('keydown', (e) => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('cv-card')) {
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target.classList?.contains('cv-card') || e.target.classList?.contains('linha'))) {
       e.preventDefault();
       e.target.click();
     }
@@ -1716,7 +1931,9 @@ function bindEvents() {
       case 'biblioteca-tipo': state.bibliotecaTipo = value; return render();
       case 'tag-recurso': state.bibliotecaTag = state.bibliotecaTag === value ? '' : value; return render();
       case 'mark-published': return marcarPublicado(id);
-      case 'novo-no-dia': return openVideoForm(null, { dataPublicacao: dia });
+      case 'novo-no-dia': return openVideoForm(null, { dataPublicacao: dia, canalId: id });
+      case 'toggle-etapa': return alternarEtapa(id, value);
+      case 'ver-todos-pub': state.canalVerTodosPub = !state.canalVerTodosPub; return render();
       case 'novo-no-canal': return openVideoForm(null, { canalId: id });
       case 'semana-prev': state.weekStart = addDays(state.weekStart, -7); return render();
       case 'semana-next': state.weekStart = addDays(state.weekStart, 7); return render();
