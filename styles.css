@@ -264,6 +264,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: color-mix(in srgb, var(--c) 15%, var(--surface));
 }
 .canal-pill-av.todos { color: var(--muted); background: var(--surface-2); }
+.canal-pill-av { position: relative; }
+.canal-pill-alerta {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--surface);
+}
 
 .canal-pill small {
   min-width: 18px;
@@ -1449,7 +1460,18 @@ body.modal-open .topbar {
   margin: 4px 0 0;
   color: var(--muted);
 }
-.cv-resumo-alerta { color: var(--danger); font-weight: 600; }
+.cv-resumo b { color: var(--text); font-variant-numeric: tabular-nums; }
+.cv-resumo-hoje { color: var(--text); }
+.cv-resumo-hoje::before { content: "● "; font-size: 9px; vertical-align: 2px; color: var(--ok); }
+.cv-resumo-alerta {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cv-resumo-alerta:hover { text-decoration: underline; }
 .cv-resumo-alerta::before { content: "● "; font-size: 9px; vertical-align: 2px; }
 
 .cv-head-acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1484,11 +1506,24 @@ body.modal-open .topbar {
   background:
     radial-gradient(120% 70% at 0% 0%, color-mix(in srgb, var(--c) 9%, transparent), transparent 60%),
     var(--surface);
+  box-shadow: var(--shadow);
   cursor: pointer;
-  transition: border-color .15s, transform .15s;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+}
+/* Faixa fina na cor do canal no topo do card. */
+.cv-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--c);
+  opacity: .85;
 }
 .cv-card:hover, .cv-card:focus-visible {
   border-color: color-mix(in srgb, var(--c) 45%, var(--border));
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--c) 45%, transparent);
   transform: translateY(-2px);
   outline: none;
 }
@@ -1502,16 +1537,16 @@ body.modal-open .topbar {
   place-items: center;
   border-radius: 50%;
   font-weight: 750;
+  font-size: 14px;
   letter-spacing: .02em;
-  color: var(--c);
-  background: color-mix(in srgb, var(--c) 16%, var(--surface));
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c) 45%, transparent);
+  color: #fff;
+  background: linear-gradient(140deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c) 60%);
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--c) 60%, transparent);
 }
 .cv-nome { flex: 1; min-width: 0; }
 .cv-nome h3, .cv-nome p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cv-nome h3 { font-size: 1.05rem; }
-.cv-nome p { margin: 1px 0 0; font-size: 12.5px; color: var(--muted); }
-.cv-sem { color: var(--faint); font-style: italic; }
+.cv-nome p { margin: 2px 0 0; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
 
 .cv-sit {
   flex: none;
@@ -1549,9 +1584,43 @@ body.modal-open .topbar {
 .cv-dia b { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 .cv-dia small { font-size: 10.5px; text-transform: uppercase; color: var(--muted); letter-spacing: .05em; }
 .cv-dia.vazio { color: var(--faint); border-top-color: var(--border-strong); }
-.cv-prox-txt { min-width: 0; display: grid; }
-.cv-prox-txt small { font-size: 11px; color: var(--faint); }
-.cv-prox-txt strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-dia.hoje { background: var(--c); color: #fff; border-top-color: transparent; }
+.cv-dia.hoje small { color: rgba(255, 255, 255, .9); font-weight: 700; }
+.cv-prox-txt { min-width: 0; display: grid; gap: 2px; }
+.cv-prox-txt small { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Título do próximo conteúdo em até 2 linhas, em vez de cortar no meio. */
+.cv-prox-txt strong {
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cv-atraso {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -6px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
+}
+.cv-atraso-tag { flex: none; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.cv-atraso-tit { flex: 1; min-width: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-atraso-mais {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--danger);
+}
 
 .cv-funil { display: grid; gap: 8px; }
 .cv-barra {
@@ -1574,6 +1643,8 @@ body.modal-open .topbar {
 }
 .cv-legenda li { display: grid; }
 .cv-legenda b { font-size: 1rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.cv-legenda li.zero { color: var(--faint); }
+.cv-legenda li.zero b { color: var(--faint); font-weight: 500; }
 .cv-legenda li::before {
   content: "";
   width: 14px;
@@ -1596,7 +1667,53 @@ body.modal-open .topbar {
   padding-top: 12px;
   border-top: 1px dashed var(--border);
 }
-.cv-foot .tipo-resumo { flex: 1; min-width: 0; }
+.cv-foot { margin-top: auto; }
+.cv-numeros {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cv-numeros b { color: var(--text); font-variant-numeric: tabular-nums; }
+.cv-tipos { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cv-numeros > span, .cv-numeros .tipo { white-space: nowrap; }
+
+/* Cartão vazio para cadastrar outro canal (preenche o espaço da grade). */
+.cv-novo {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 220px;
+  font: inherit;
+  text-align: center;
+  color: var(--muted);
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  box-shadow: none;
+}
+.cv-novo::before { display: none; }
+.cv-novo:hover, .cv-novo:focus-visible {
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--surface);
+  box-shadow: none;
+}
+.cv-novo small { max-width: 220px; color: var(--faint); }
+.cv-novo-mais {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: 300;
+  background: var(--surface-2);
+}
 .cv-acoes { display: flex; gap: 2px; flex: none; }
 .cv-icon {
   display: grid;

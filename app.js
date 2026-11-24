@@ -1021,12 +1021,33 @@ const ICO = {
 
 const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
-// Iniciais do canal ("Curioso Por Militarismo" -> "CM").
-function iniciais(nome) {
-  const palavras = String(nome || '').trim().split(/\s+/).filter((p) => p.length > 2 || /^[A-ZÀ-Ú]/.test(p));
+// Palavras do nome sem o que está entre parênteses e sem pontuação.
+function palavrasNome(nome) {
+  return String(nome || '').replace(/\([^)]*\)/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+}
+
+// Iniciais básicas ("Curioso Por Militarismo" -> "CM"; "Curious AF (Facebook)" -> "CA", nunca "C(").
+function iniciaisBase(nome) {
+  const palavras = palavrasNome(nome).filter((p) => p.length > 2 || /^\p{Lu}/u.test(p));
   if (!palavras.length) return '?';
-  if (palavras.length === 1) return palavras[0][0].toUpperCase();
+  if (palavras.length === 1) return palavras[0].slice(0, 2).toUpperCase();
   return (palavras[0][0] + palavras[palavras.length - 1][0]).toUpperCase();
+}
+
+// Sigla do canal sem repetir a de outro: se "CA" já existe, "Curious AF" vira "CAF".
+function iniciais(nome) {
+  const usadas = new Set();
+  for (const c of canaisOrdenados()) {
+    let sigla = iniciaisBase(c.nome);
+    if (usadas.has(sigla)) {
+      const p = palavrasNome(c.nome);
+      const outra = p.length > 1 ? (p[0][0] + p[p.length - 1].slice(0, 2)).toUpperCase() : sigla;
+      if (!usadas.has(outra)) sigla = outra;
+    }
+    usadas.add(sigla);
+    if (c.nome === nome) return sigla;
+  }
+  return iniciaisBase(nome);
 }
 
 // Situação do canal em uma palavra, para o selo do card.
@@ -1043,7 +1064,10 @@ function htmlCanais() {
   const hoje = getTodayISO();
   const inicio = startOfWeek(hoje);
   const fim = addDays(inicio, 6);
-  const semana = state.videos.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
+  const daSemana = state.videos.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim);
+  const semana = daSemana.length;
+  const pubSemana = daSemana.filter(isPublicado).length;
+  const hojeQtd = state.videos.filter((v) => v.dataPublicacao === hoje && !isPublicado(v)).length;
   const atrasados = state.videos.filter((v) => isAtrasado(v, hoje)).length;
   const n = state.canais.length;
 
@@ -1054,8 +1078,9 @@ function htmlCanais() {
           <p class="cv-eyebrow">Seus canais</p>
           <h1>${n} ${n === 1 ? 'canal' : 'canais'} no ar</h1>
           <p class="cv-resumo">
-            <span>${semana} conteúdo${semana === 1 ? '' : 's'} nesta semana</span>
-            ${atrasados ? `<span class="cv-resumo-alerta">${atrasados} atrasado${atrasados > 1 ? 's' : ''}</span>` : ''}
+            <span><b>${semana}</b> conteúdo${semana === 1 ? '' : 's'} nesta semana · <b>${pubSemana}</b> já publicado${pubSemana === 1 ? '' : 's'}</span>
+            ${hojeQtd ? `<span class="cv-resumo-hoje"><b>${hojeQtd}</b> para sair hoje</span>` : ''}
+            ${atrasados ? `<button class="cv-resumo-alerta" data-action="ver-atrasados" title="Ver os atrasados na aba Semana">${atrasados} atrasado${atrasados > 1 ? 's' : ''} →</button>` : ''}
           </p>
         </div>
         <div class="cv-head-acoes">
@@ -1080,6 +1105,8 @@ function htmlCanaisLista() {
   if (!lista.length) return `<div class="cv-vazio"><p>Nenhum canal com “${esc(state.canaisBusca)}”.</p></div>`;
 
   const hoje = getTodayISO();
+  const inicio = startOfWeek(hoje);
+  const fim = addDays(inicio, 6);
   const etapas = [
     ['planejado', 'Ideias'],
     ['em_producao', 'Produção'],
@@ -1093,24 +1120,40 @@ function htmlCanaisLista() {
     videos.forEach((v) => { conta[isPublicado(v) ? 'publicado' : (conta[v.status] !== undefined ? v.status : 'planejado')] += 1; });
     const total = videos.length;
     const proximo = videos.filter((v) => !isPublicado(v) && v.dataPublicacao >= hoje).sort(compareAgenda)[0];
+    const atrasadosCanal = videos.filter((v) => isAtrasado(v, hoje)).sort(compareAgenda);
     const sit = situacaoCanal(videos, hoje);
     const porTipo = Object.entries(contarPorTipo(videos)).filter(([, n]) => n);
+    const semanaCanal = videos.filter((v) => v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
     const link = safeUrl(c.url);
 
     let dataBloco = '<span class="cv-dia vazio">—</span>';
     if (proximo) {
       const [, m, d] = proximo.dataPublicacao.split('-');
-      const quando = proximo.dataPublicacao === hoje ? 'hoje' : MESES_CURTOS[Number(m) - 1];
-      dataBloco = `<span class="cv-dia"><b>${esc(d)}</b><small>${esc(quando)}</small></span>`;
+      const ehHoje = proximo.dataPublicacao === hoje;
+      const quando = ehHoje ? 'hoje' : proximo.dataPublicacao === addDays(hoje, 1) ? 'amanhã' : MESES_CURTOS[Number(m) - 1];
+      dataBloco = `<span class="cv-dia ${ehHoje ? 'hoje' : ''}"><b>${esc(d)}</b><small>${esc(quando)}</small></span>`;
+    }
+
+    // O atrasado mais antigo aparece no card; os outros ficam no "+N".
+    let atrasoBloco = '';
+    if (atrasadosCanal.length) {
+      const a = atrasadosCanal[0];
+      const resto = atrasadosCanal.length - 1;
+      atrasoBloco = `
+        <div class="cv-atraso" title="${esc(a.titulo)}">
+          <span class="cv-atraso-tag">Atrasado · ${esc(formatDiaMes(a.dataPublicacao))}</span>
+          <span class="cv-atraso-tit">${esc(a.titulo)}</span>
+          ${resto ? `<span class="cv-atraso-mais">+${resto}</span>` : ''}
+        </div>`;
     }
 
     return `
-      <article class="cv-card" style="--c:${canalCor(c.id)}" data-action="abrir-canal" data-id="${esc(c.id)}" tabindex="0" role="button" aria-label="Abrir ${esc(c.nome)}">
+      <article class="cv-card ${atrasadosCanal.length ? 'tem-atraso' : ''}" style="--c:${canalCor(c.id)}" data-action="abrir-canal" data-id="${esc(c.id)}" tabindex="0" role="button" aria-label="Abrir ${esc(c.nome)}">
         <div class="cv-top">
           <span class="cv-avatar">${esc(iniciais(c.nome))}</span>
           <div class="cv-nome">
             <h3 title="${esc(c.nome)}">${esc(c.nome)}</h3>
-            <p>${c.nicho ? esc(c.nicho) : '<span class="cv-sem">sem nicho</span>'}</p>
+            ${c.nicho ? `<p>${esc(c.nicho)}</p>` : ''}
           </div>
           <span class="cv-sit ${sit.cls}">${esc(sit.texto)}</span>
         </div>
@@ -1118,23 +1161,27 @@ function htmlCanaisLista() {
         <div class="cv-prox">
           ${dataBloco}
           <div class="cv-prox-txt">
-            <small>Próximo conteúdo</small>
-            <strong>${proximo ? esc(proximo.titulo) : 'Nada agendado'}</strong>
-            ${proximo?.horario ? `<small>às ${esc(proximo.horario)}</small>` : ''}
+            <small>Próximo conteúdo${proximo ? ` · ${esc(TIPOS[proximo.tipo] || proximo.tipo || '')}${proximo.horario ? ` · ${esc(proximo.horario)}` : ''}` : ''}</small>
+            <strong title="${proximo ? esc(proximo.titulo) : ''}">${proximo ? esc(proximo.titulo) : 'Nada agendado'}</strong>
           </div>
         </div>
+        ${atrasoBloco}
 
         <div class="cv-funil" title="${total} conteúdo(s) no total">
           <div class="cv-barra">
             ${total ? etapas.map(([k]) => conta[k] ? `<i class="e-${k}" style="flex:${conta[k]}"></i>` : '').join('') : '<i class="e-vazio" style="flex:1"></i>'}
           </div>
           <ul class="cv-legenda">
-            ${etapas.map(([k, label]) => `<li class="e-${k}"><b>${conta[k]}</b>${esc(label)}</li>`).join('')}
+            ${etapas.map(([k, label]) => `<li class="e-${k} ${conta[k] ? '' : 'zero'}"><b>${conta[k]}</b>${esc(label)}</li>`).join('')}
           </ul>
         </div>
 
         <footer class="cv-foot">
-          <span class="tipo-resumo">${porTipo.map(([k, n]) => `${htmlTipo(k)} <b>${n}</b>`).join(' ') || '<span class="muted">Sem conteúdos</span>'}</span>
+          <span class="cv-numeros">
+            <span><b>${semanaCanal}</b> nesta semana</span>
+            <span><b>${total}</b> no total</span>
+            ${porTipo.length > 1 ? `<span class="cv-tipos">${porTipo.map(([k, n]) => `${htmlTipo(k)} ${n}`).join(' ')}</span>` : porTipo.length ? htmlTipo(porTipo[0][0]) : ''}
+          </span>
           <span class="cv-acoes">
             ${link ? `<a class="cv-icon" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-stop title="Abrir no YouTube" aria-label="Abrir no YouTube">${ICO.externo}</a>` : ''}
             <button class="cv-icon" data-action="edit-canal" data-id="${esc(c.id)}" title="Editar canal" aria-label="Editar canal">${ICO.editar}</button>
@@ -1143,7 +1190,12 @@ function htmlCanaisLista() {
         </footer>
       </article>
     `;
-  }).join('')}</div>`;
+  }).join('')}${q ? '' : `
+    <button class="cv-card cv-novo" data-action="novo-canal">
+      <span class="cv-novo-mais" aria-hidden="true">+</span>
+      <strong>Novo canal</strong>
+      <small>Cadastre outro canal para planejar a agenda dele aqui.</small>
+    </button>`}</div>`;
 }
 
 // Nome do dia para os grupos da agenda ("Hoje", "Amanhã", "Sexta").
@@ -1682,9 +1734,11 @@ function renderCanalBar() {
   const daSemana = (canalId) =>
     state.videos.filter((v) => v.canalId === canalId && v.dataPublicacao >= inicio && v.dataPublicacao <= fim).length;
 
+  const temAtraso = (canalId) => state.videos.some((v) => v.canalId === canalId && isAtrasado(v, hoje));
+
   const botao = (id, nome, cor, extra) => {
     const avatar = id
-      ? `<span class="canal-pill-av">${esc(iniciais(nome))}</span>`
+      ? `<span class="canal-pill-av">${esc(iniciais(nome))}${temAtraso(id) ? '<i class="canal-pill-alerta" title="Tem conteúdo atrasado"></i>' : ''}</span>`
       : '<span class="canal-pill-av todos"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg></span>';
     const dica = extra !== undefined ? `${nome} · ${extra} conteúdo${extra === 1 ? '' : 's'} nesta semana` : 'Todos os canais';
     return `
@@ -1942,6 +1996,17 @@ function bindEvents() {
       case 'canal-tipo': state.canalTipo = value; return render();
       case 'abrir-canal': setCanalAtivo(id); state.tab = 'canais'; window.scrollTo(0, 0); return render();
       case 'fechar-canal': setCanalAtivo(''); return render();
+      case 'ver-atrasados': {
+        state.tab = 'semana';
+        render();
+        const bloco = [...content.querySelectorAll('h3')].find((h) => h.textContent.startsWith('Atrasados'));
+        if (bloco) {
+          // Desconta a barra fixa do topo para o título não ficar escondido.
+          const topo = document.querySelector('.topbar')?.offsetHeight || 0;
+          window.scrollTo({ top: bloco.getBoundingClientRect().top + window.scrollY - topo - 16, behavior: 'smooth' });
+        }
+        return undefined;
+      }
       case 'novo-canal': return openCanalForm();
       case 'edit-canal': return openCanalForm(id);
       case 'del-canal': return deleteCanal(id);
