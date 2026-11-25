@@ -1,20 +1,29 @@
 // API do Gerenciador de Canais: Cloudflare Worker + D1 (SQLite).
 //
-// Rotas (todas exigem `Authorization: Bearer <API_KEY>` ou `Bearer <ID token do Google>`
-// de um e-mail listado em ALLOWED_EMAILS):
-//   GET    /api/data              -> { ok, data: { canais, videos } }
-//   PUT    /api/canais/:id        -> cria/atualiza canal
-//   DELETE /api/canais/:id        -> apaga canal (e os vídeos dele)
+// Acesso: `Authorization: Bearer <API_KEY>` (admin) ou `Bearer <ID token do Google>`.
+// Quem entra com Google: e-mails do secret ALLOWED_EMAILS são admins fixos (donos);
+// os demais precisam estar na tabela `usuarios` (cadastrados por um admin).
+// Papéis: admin vê e edita tudo; membro só os canais ligados a ele (usuario_canais).
+//
+// Rotas:
+//   GET    /api/data              -> { ok, data: { canais, videos, recursos }, me }
+//   GET    /api/me                -> { ok, me }
+//   PUT    /api/canais/:id        -> cria (admin) / atualiza canal
+//   DELETE /api/canais/:id        -> apaga canal e os vídeos dele (admin)
 //   PUT    /api/videos/:id        -> cria/atualiza vídeo
 //   DELETE /api/videos/:id        -> apaga vídeo
 //   PUT    /api/recursos/:id      -> cria/atualiza item da biblioteca
 //   DELETE /api/recursos/:id      -> apaga item da biblioteca
-//   POST   /api/import            -> { canais, videos } em lote (migração)
+//   POST   /api/import            -> { canais, videos } em lote (admin)
+//   GET    /api/usuarios          -> lista de usuários e seus canais (admin)
+//   PUT    /api/usuarios/:email   -> { nome, papel, ativo, canais: [ids] } (admin)
+//   DELETE /api/usuarios/:email   -> remove o acesso (admin)
 
 const STATUS = ['planejado', 'em_producao', 'pronto', 'publicado'];
 const CHECKS = ['roteiro', 'gravacao', 'edicao', 'thumbnail', 'publicado'];
 const TIPOS = ['short', 'longo', 'live', 'post'];
 const TIPOS_RECURSO = ['prompt', 'skill', 'link', 'referencia', 'outro'];
+const PAPEIS = ['admin', 'membro'];
 const MAX_TEXT = 20000;
 
 export default {
@@ -33,6 +42,7 @@ export default {
       if (!auth.ok) {
         return json({ ok: false, error: auth.error }, 401, cors);
       }
+      const me = auth.user;
 
       const url = new URL(request.url);
       const parts = url.pathname.replace(/\/+$/, '').split('/').filter(Boolean); // ['api', ...]
@@ -41,14 +51,44 @@ export default {
       const [, resource, rawId] = parts;
       const id = rawId ? decodeURIComponent(rawId) : '';
 
+      if (resource === 'me' && request.method === 'GET') {
+        return json({ ok: true, me: publicMe(me) }, 200, cors);
+      }
+
       if (resource === 'data' && request.method === 'GET') {
-        return json({ ok: true, data: await exportAll(env.DB) }, 200, cors);
+        return json({ ok: true, data: filtrarPara(me, await exportAll(env.DB)), me: publicMe(me) }, 200, cors);
       }
 
       if (resource === 'import' && request.method === 'POST') {
+        exigirAdmin(me);
         const body = await readJson(request);
         const result = await importAll(env.DB, body);
         return json({ ok: true, ...result }, 200, cors);
+      }
+
+      if (resource === 'usuarios') {
+        exigirAdmin(me);
+        if (request.method === 'GET' && !id) {
+          return json({ ok: true, usuarios: await listarUsuarios(env), canais: await todosCanaisIds(env.DB) }, 200, cors);
+        }
+        const email = normEmail(id);
+        if (!email) return json({ ok: false, error: 'e-mail inválido' }, 400, cors);
+        if (donos(env).includes(email)) {
+          throw new HttpError(400, 'Este e-mail é dono (ALLOWED_EMAILS) e não pode ser alterado aqui');
+        }
+        if (request.method === 'PUT') {
+          const body = await readJson(request);
+          const usuario = await salvarUsuario(env.DB, email, body);
+          return json({ ok: true, usuario }, 200, cors);
+        }
+        if (request.method === 'DELETE') {
+          if (email === me.email) throw new HttpError(400, 'Você não pode remover o próprio acesso');
+          await env.DB.batch([
+            env.DB.prepare('DELETE FROM usuario_canais WHERE email = ?').bind(email),
+            env.DB.prepare('DELETE FROM usuarios WHERE email = ?').bind(email)
+          ]);
+          return json({ ok: true }, 200, cors);
+        }
       }
 
       if (['canais', 'videos', 'recursos'].includes(resource) && id) {
@@ -56,17 +96,20 @@ export default {
 
         if (request.method === 'PUT') {
           const body = await readJson(request);
+          await checarEscrita(env.DB, me, resource, id, body);
           const upsert = { canais: upsertCanal, videos: upsertVideo, recursos: upsertRecurso }[resource];
           const saved = await upsert(env.DB, { ...body, id });
           return json({ ok: true, item: saved }, 200, cors);
         }
 
         if (request.method === 'DELETE') {
+          await checarEscrita(env.DB, me, resource, id, null);
           if (resource === 'canais') {
             // Garante o efeito mesmo se foreign_keys estiver desligado.
             await env.DB.batch([
               env.DB.prepare('DELETE FROM videos WHERE canal_id = ?').bind(id),
               env.DB.prepare('UPDATE recursos SET canal_id = NULL WHERE canal_id = ?').bind(id),
+              env.DB.prepare('DELETE FROM usuario_canais WHERE canal_id = ?').bind(id),
               env.DB.prepare('DELETE FROM canais WHERE id = ?').bind(id)
             ]);
           } else {
@@ -92,6 +135,143 @@ class HttpError extends Error {
   }
 }
 
+// ---------- usuários / permissões ----------
+
+function normEmail(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(v) ? v : '';
+}
+
+function donos(env) {
+  return String(env.ALLOWED_EMAILS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+// me = { email, nome, foto, papel, dono, canais: Set | null (null = todos) }
+function publicMe(me) {
+  return {
+    email: me.email,
+    nome: me.nome || '',
+    foto: me.foto || '',
+    papel: me.papel,
+    dono: Boolean(me.dono),
+    canais: me.canais ? [...me.canais] : null
+  };
+}
+
+function exigirAdmin(me) {
+  if (me.papel !== 'admin') throw new HttpError(403, 'Só administradores podem fazer isso');
+}
+
+function podeCanal(me, canalId) {
+  return me.papel === 'admin' || Boolean(canalId && me.canais?.has(canalId));
+}
+
+function filtrarPara(me, data) {
+  if (me.papel === 'admin') return data;
+  return {
+    canais: data.canais.filter((c) => me.canais.has(c.id)),
+    videos: data.videos.filter((v) => me.canais.has(v.canalId)),
+    // Biblioteca: itens gerais (sem canal) + os dos canais da pessoa.
+    recursos: data.recursos.filter((r) => !r.canalId || me.canais.has(r.canalId))
+  };
+}
+
+async function checarEscrita(db, me, resource, id, body) {
+  if (me.papel === 'admin') return;
+  const negar = () => { throw new HttpError(403, 'Você não tem acesso a este canal'); };
+
+  if (resource === 'canais') {
+    const existe = await db.prepare('SELECT 1 FROM canais WHERE id = ?').bind(id).first();
+    if (!existe || !body) throw new HttpError(403, 'Só administradores criam ou excluem canais');
+    if (!podeCanal(me, id)) negar();
+    return;
+  }
+
+  const table = resource === 'videos' ? 'videos' : 'recursos';
+  const atual = await db.prepare(`SELECT canal_id FROM ${table} WHERE id = ?`).bind(id).first();
+  // Item existente: precisa ter acesso ao canal de hoje (recurso geral é livre).
+  if (atual && (atual.canal_id || resource === 'videos') && !podeCanal(me, atual.canal_id)) negar();
+  // Destino do item (PUT): precisa ter acesso ao canal novo.
+  if (body) {
+    const destino = String(body.canalId || '').trim();
+    if ((destino || resource === 'videos') && !podeCanal(me, destino)) negar();
+  }
+}
+
+async function carregarUsuario(env, email, claims) {
+  if (donos(env).includes(email)) {
+    return { email, nome: claims?.name || '', foto: claims?.picture || '', papel: 'admin', dono: true, canais: null };
+  }
+  const u = await env.DB.prepare('SELECT * FROM usuarios WHERE email = ? AND ativo = 1').bind(email).first();
+  if (!u) return null;
+  let canais = null;
+  if (u.papel !== 'admin') {
+    const rs = await env.DB.prepare('SELECT canal_id FROM usuario_canais WHERE email = ?').bind(email).all();
+    canais = new Set(rs.results.map((r) => r.canal_id));
+  }
+  // Guarda nome/foto do Google e a hora do acesso (no máximo a cada 5 min).
+  const agora = new Date();
+  if (claims && (!u.ultimo_acesso || agora - new Date(u.ultimo_acesso) > 5 * 60 * 1000)) {
+    await env.DB.prepare(
+      `UPDATE usuarios SET ultimo_acesso = ?2,
+         nome = CASE WHEN nome = '' THEN ?3 ELSE nome END, foto = ?4 WHERE email = ?1`
+    ).bind(email, agora.toISOString(), String(claims.name || '').slice(0, 200), String(claims.picture || '').slice(0, 500)).run();
+  }
+  return { email, nome: u.nome || claims?.name || '', foto: claims?.picture || u.foto || '', papel: u.papel, dono: false, canais };
+}
+
+async function listarUsuarios(env) {
+  const [us, links] = await env.DB.batch([
+    env.DB.prepare('SELECT * FROM usuarios ORDER BY papel, nome COLLATE NOCASE, email'),
+    env.DB.prepare('SELECT email, canal_id FROM usuario_canais')
+  ]);
+  const porEmail = {};
+  links.results.forEach((l) => (porEmail[l.email] ||= []).push(l.canal_id));
+  const lista = us.results
+    .filter((u) => !donos(env).includes(u.email))
+    .map((u) => ({
+      email: u.email,
+      nome: u.nome,
+      foto: u.foto,
+      papel: u.papel,
+      ativo: Boolean(u.ativo),
+      dono: false,
+      ultimoAcesso: u.ultimo_acesso,
+      criadoEm: u.created_at,
+      canais: porEmail[u.email] || []
+    }));
+  const fixos = donos(env).map((email) => ({ email, nome: '', foto: '', papel: 'admin', ativo: true, dono: true, ultimoAcesso: '', canais: [] }));
+  return [...fixos, ...lista];
+}
+
+async function todosCanaisIds(db) {
+  const rs = await db.prepare('SELECT id FROM canais').all();
+  return rs.results.map((r) => r.id);
+}
+
+async function salvarUsuario(db, email, body) {
+  const papel = PAPEIS.includes(body?.papel) ? body.papel : 'membro';
+  const nome = text(body?.nome, 'nome', { max: 200 });
+  const ativo = body?.ativo === undefined ? 1 : bool(body.ativo);
+  const pedidos = Array.isArray(body?.canais) ? body.canais.map(String).filter(isValidId) : [];
+  const existentes = new Set(await todosCanaisIds(db));
+  const canais = [...new Set(pedidos)].filter((c) => existentes.has(c));
+
+  await db.batch([
+    db.prepare(
+      `INSERT INTO usuarios (email, nome, papel, ativo) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(email) DO UPDATE SET nome = excluded.nome, papel = excluded.papel,
+         ativo = excluded.ativo, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
+    ).bind(email, nome, papel, ativo),
+    db.prepare('DELETE FROM usuario_canais WHERE email = ?').bind(email),
+    ...canais.map((c) => db.prepare('INSERT INTO usuario_canais (email, canal_id) VALUES (?, ?)').bind(email, c))
+  ]);
+  return { email, nome, papel, ativo: Boolean(ativo), canais };
+}
+
 // ---------- autenticação / CORS ----------
 
 async function authorize(request, env) {
@@ -102,23 +282,28 @@ async function authorize(request, env) {
   // ID token do Google = JWT (três partes separadas por ponto).
   if (/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) {
     if (!env.GOOGLE_CLIENT_ID) return { ok: false, error: 'Login com Google não configurado no servidor' };
+    let claims;
     try {
-      const claims = await verifyGoogleIdToken(token, env.GOOGLE_CLIENT_ID);
-      const allowed = String(env.ALLOWED_EMAILS || '')
-        .split(',')
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean);
-      const email = String(claims.email || '').toLowerCase();
-      if (!claims.email_verified || !allowed.includes(email)) {
-        return { ok: false, error: `A conta ${email || 'Google'} não tem acesso` };
-      }
-      return { ok: true, user: email };
+      claims = await verifyGoogleIdToken(token, env.GOOGLE_CLIENT_ID);
     } catch (err) {
       return { ok: false, error: `Login do Google inválido (${err.message})` };
     }
+    const email = String(claims.email || '').toLowerCase();
+    const user = claims.email_verified ? await carregarUsuario(env, email, claims) : null;
+    if (!user) return { ok: false, error: `A conta ${email || 'Google'} não tem acesso. Peça a um administrador.` };
+    return { ok: true, user };
   }
 
-  if (env.API_KEY && (await isApiKey(token, env.API_KEY))) return { ok: true, user: 'api-key' };
+  if (env.API_KEY && (await isApiKey(token, env.API_KEY))) {
+    // Só para testes locais: DEV_IMPERSONATE=1 no .dev.vars permite agir como outro e-mail.
+    const como = env.DEV_IMPERSONATE === '1' ? normEmail(request.headers.get('X-Dev-As')) : '';
+    if (como) {
+      const user = await carregarUsuario(env, como, null);
+      if (!user) return { ok: false, error: `A conta ${como} não tem acesso. Peça a um administrador.` };
+      return { ok: true, user };
+    }
+    return { ok: true, user: { email: 'chave-de-acesso', nome: 'Chave de acesso', papel: 'admin', dono: true, canais: null } };
+  }
   return { ok: false, error: 'Chave de acesso inválida' };
 }
 
@@ -205,7 +390,7 @@ function corsHeaders(request, env) {
     .filter(Boolean);
   const headers = {
     'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Dev-As',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin'
   };

@@ -158,7 +158,13 @@ const state = {
   editingCanalId: null,
   editingVideoId: null,
   showCanalForm: false,
-  showVideoForm: false
+  showVideoForm: false,
+  // Usuários (só admin)
+  me: null,
+  usuarios: [],
+  usuariosCarregados: false,
+  usuariosCarregando: false,
+  usuariosBusca: ''
 };
 
 // ---------- Acesso à API ----------
@@ -280,6 +286,9 @@ async function renovarGoogleSilencioso() {
 }
 
 function sair() {
+  localStorage.removeItem('gc_me');
+  state.usuarios = [];
+  state.usuariosCarregados = false;
   localStorage.removeItem(GOOGLE_TOKEN_STORAGE);
   localStorage.removeItem(API_KEY_STORAGE);
   if (googleDisponivel()) google.accounts.id.disableAutoSelect();
@@ -318,6 +327,8 @@ async function apiRequest(method, path, body, tentouRenovar = false) {
     method,
     headers: {
       Authorization: `Bearer ${key}`,
+      // Só com a API local: localStorage.gc_dev_as = 'email' simula outro usuário.
+      ...(USA_API_LOCAL && localStorage.getItem('gc_dev_as') ? { 'X-Dev-As': localStorage.getItem('gc_dev_as') } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
     },
     body: body !== undefined ? JSON.stringify(body) : undefined
@@ -433,6 +444,7 @@ async function loadData() {
   try {
     const payload = await apiRequest('GET', '/api/data');
     applyData(payload.data);
+    aplicarPapel(payload.me || null);
     saveCache();
     byId('google-erro')?.classList.add('hide');
     state.syncMessage = `Banco: dados carregados às ${new Date().toLocaleTimeString('pt-BR')}`;
@@ -1238,6 +1250,9 @@ function htmlCanais() {
 
 function htmlCanaisLista() {
   if (!state.canais.length) {
+    if (state.me && !isAdmin()) {
+      return `<div class="cv-vazio"><p>Você ainda não tem canais liberados.</p><p class="muted">Peça a um administrador para liberar os canais em que você trabalha.</p></div>`;
+    }
     return `<div class="cv-vazio"><p>Nenhum canal cadastrado ainda.</p><button class="btn primary" data-action="novo-canal">+ Criar o primeiro canal</button></div>`;
   }
   const q = state.canaisBusca.toLowerCase().trim();
@@ -1901,22 +1916,273 @@ function renderCanalBar() {
   }
 }
 
+// ---------- Usuários e acesso aos canais (só admin) ----------
+
+function isAdmin() {
+  return state.me?.papel === 'admin';
+}
+
+// Ajusta a interface ao papel de quem entrou.
+function aplicarPapel(me) {
+  state.me = me;
+  const admin = !me || me.papel === 'admin'; // sem resposta (ex.: offline) = não esconde nada
+  document.body.classList.toggle('papel-membro', !admin);
+  byId('tab-usuarios')?.classList.toggle('hide', !(me && me.papel === 'admin'));
+  if (state.tab === 'usuarios' && !(me && me.papel === 'admin')) state.tab = 'canais';
+  try {
+    if (me) localStorage.setItem('gc_me', JSON.stringify(me));
+  } catch { /* sem espaço */ }
+}
+
+async function carregarUsuarios(forcar = false) {
+  if (state.usuariosCarregando || (state.usuariosCarregados && !forcar)) return;
+  state.usuariosCarregando = true;
+  try {
+    const payload = await apiRequest('GET', '/api/usuarios');
+    state.usuarios = payload.usuarios || [];
+    state.usuariosCarregados = true;
+  } catch (error) {
+    setStatus(`Usuários: falha ao carregar (${error.message}).`);
+  } finally {
+    state.usuariosCarregando = false;
+    if (state.tab === 'usuarios') render();
+  }
+}
+
+function usuarioByEmail(email) {
+  return state.usuarios.find((u) => u.email === email);
+}
+
+async function salvarUsuario(email, mudancas, okMessage) {
+  const u = usuarioByEmail(email);
+  if (!u || u.dono) return;
+  const antes = { ...u, canais: [...u.canais] };
+  Object.assign(u, mudancas);
+  render();
+  try {
+    await apiRequest('PUT', `/api/usuarios/${encodeURIComponent(email)}`, {
+      nome: u.nome, papel: u.papel, ativo: u.ativo, canais: u.canais
+    });
+    setStatus(okMessage || `Acesso de ${u.nome || u.email} atualizado.`);
+  } catch (error) {
+    Object.assign(u, antes);
+    render();
+    setStatus(`Usuários: NÃO salvo (${error.message}).`);
+  }
+}
+
+async function adicionarUsuario() {
+  const emailEl = byId('us-novo-email');
+  const nomeEl = byId('us-novo-nome');
+  const papelEl = byId('us-novo-papel');
+  const email = String(emailEl?.value || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    setStatus('Usuários: informe um e-mail válido.');
+    emailEl?.focus();
+    return;
+  }
+  if (usuarioByEmail(email)) {
+    setStatus('Usuários: essa pessoa já está na lista.');
+    return;
+  }
+  const novo = { email, nome: String(nomeEl?.value || '').trim(), papel: papelEl?.value === 'admin' ? 'admin' : 'membro', ativo: true, dono: false, ultimoAcesso: '', canais: [] };
+  try {
+    await apiRequest('PUT', `/api/usuarios/${encodeURIComponent(email)}`, novo);
+    state.usuarios.push(novo);
+    setStatus(`${novo.nome || email} adicionado. Agora escolha os canais dessa pessoa.`);
+    render();
+  } catch (error) {
+    setStatus(`Usuários: NÃO salvo (${error.message}).`);
+  }
+}
+
+async function removerUsuario(email) {
+  const u = usuarioByEmail(email);
+  if (!u || u.dono) return;
+  if (!confirm(`Remover o acesso de ${u.nome || u.email}? A pessoa não conseguirá mais entrar.`)) return;
+  try {
+    await apiRequest('DELETE', `/api/usuarios/${encodeURIComponent(email)}`);
+    state.usuarios = state.usuarios.filter((x) => x.email !== email);
+    setStatus(`Acesso de ${u.nome || u.email} removido.`);
+    render();
+  } catch (error) {
+    setStatus(`Usuários: NÃO removido (${error.message}).`);
+  }
+}
+
+function alternarCanalUsuario(email, canalId) {
+  const u = usuarioByEmail(email);
+  if (!u) return;
+  const tem = u.canais.includes(canalId);
+  const canais = tem ? u.canais.filter((c) => c !== canalId) : [...u.canais, canalId];
+  salvarUsuario(email, { canais }, `${canalNome(canalId)} ${tem ? 'retirado de' : 'liberado para'} ${u.nome || u.email}.`);
+}
+
+function tempoRelativo(iso) {
+  if (!iso) return '';
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (min < 2) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.round(h / 24);
+  return d < 30 ? `há ${d} dia${d > 1 ? 's' : ''}` : new Date(iso).toLocaleDateString('pt-BR');
+}
+
+function iniciaisPessoa(texto) {
+  const p = String(texto || '').replace(/@.*/, '').split(/[\s._-]+/).filter(Boolean);
+  return ((p[0]?.[0] || '?') + (p[1]?.[0] || '')).toUpperCase();
+}
+
+function htmlAvatar(u) {
+  const cor = ['#e11d48', '#2563eb', '#16a34a', '#9333ea', '#ea580c', '#0891b2'][[...u.email].reduce((a, c) => a + c.charCodeAt(0), 0) % 6];
+  return u.foto
+    ? `<img class="us-avatar" src="${esc(u.foto)}" alt="" referrerpolicy="no-referrer">`
+    : `<span class="us-avatar" style="--a:${cor}">${esc(iniciaisPessoa(u.nome || u.email))}</span>`;
+}
+
+function htmlUsuarioCard(u) {
+  const ehVoce = state.me?.email === u.email;
+  const canais = canaisOrdenados();
+  const seletor = u.dono
+    ? '<span class="us-papel-fixo">Dono</span>'
+    : `<select class="us-papel" data-action="us-papel" data-id="${esc(u.email)}" aria-label="Papel de ${esc(u.email)}">
+        <option value="membro" ${u.papel === 'membro' ? 'selected' : ''}>Membro</option>
+        <option value="admin" ${u.papel === 'admin' ? 'selected' : ''}>Admin</option>
+      </select>`;
+
+  let acesso;
+  if (u.papel === 'admin') {
+    acesso = `<p class="us-tudo">${u.dono ? 'Dono do sistema: ' : ''}vê e edita <strong>todos os canais</strong>${u.dono ? '' : ' e gerencia usuários'}.</p>`;
+  } else if (!canais.length) {
+    acesso = '<p class="us-tudo">Ainda não há canais para distribuir.</p>';
+  } else {
+    acesso = `
+      <div class="us-canais-head">
+        <span>Canais liberados <b>${u.canais.length}</b>/${canais.length}</span>
+        <span class="us-atalhos">
+          <button type="button" data-action="us-todos" data-id="${esc(u.email)}">Todos</button>
+          <button type="button" data-action="us-nenhum" data-id="${esc(u.email)}">Nenhum</button>
+        </span>
+      </div>
+      <div class="us-canais">
+        ${canais.map((c) => {
+          const on = u.canais.includes(c.id);
+          return `<button type="button" class="us-canal ${on ? 'on' : ''}" style="--c:${canalCor(c.id)}" data-action="us-canal" data-id="${esc(u.email)}" data-value="${esc(c.id)}" aria-pressed="${on}">
+            <i></i>${esc(c.nome)}${on ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>' : ''}
+          </button>`;
+        }).join('')}
+      </div>`;
+  }
+
+  const status = u.dono
+    ? 'definido no servidor'
+    : !u.ativo ? 'acesso pausado'
+    : u.ultimoAcesso ? `último acesso ${tempoRelativo(u.ultimoAcesso)}` : 'ainda não entrou';
+
+  return `
+    <article class="us-card ${u.ativo ? '' : 'pausado'}">
+      <header class="us-top">
+        ${htmlAvatar(u)}
+        <div class="us-id">
+          <strong>${esc(u.nome || u.email.replace(/@.*/, ''))}${ehVoce ? ' <span class="us-voce">você</span>' : ''}</strong>
+          <span>${esc(u.email)}</span>
+          <em>${esc(status)}</em>
+        </div>
+        <div class="us-acoes">
+          ${seletor}
+          ${u.dono ? '' : `
+            <button type="button" class="cv-icon" data-action="us-ativo" data-id="${esc(u.email)}" title="${u.ativo ? 'Pausar acesso' : 'Reativar acesso'}" aria-label="${u.ativo ? 'Pausar acesso' : 'Reativar acesso'}">
+              ${u.ativo
+                ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6v12M15 6v12"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg>'}
+            </button>
+            ${ehVoce ? '' : `<button type="button" class="cv-icon danger" data-action="us-del" data-id="${esc(u.email)}" title="Remover acesso" aria-label="Remover acesso">${ICO.lixo}</button>`}`}
+        </div>
+      </header>
+      ${acesso}
+    </article>`;
+}
+
+function htmlUsuarios() {
+  if (!state.usuariosCarregados) {
+    return `<div class="empty">${state.usuariosCarregando ? 'Carregando usuários…' : 'Não foi possível carregar os usuários.'}</div>`;
+  }
+  const membros = state.usuarios.filter((u) => u.papel === 'membro');
+  const comAlguem = new Set(membros.filter((u) => u.ativo).flatMap((u) => u.canais));
+  const semNinguem = state.canais.filter((c) => !comAlguem.has(c.id));
+  const q = state.usuariosBusca.toLowerCase().trim();
+  const lista = state.usuarios.filter((u) => !q || `${u.nome} ${u.email}`.toLowerCase().includes(q));
+
+  const distribuicao = state.canais.length ? `
+    <section class="card us-dist">
+      <h3>Quem cuida de cada canal</h3>
+      <div class="us-dist-grid">
+        ${canaisOrdenados().map((c) => {
+          const pessoas = membros.filter((u) => u.ativo && u.canais.includes(c.id));
+          return `<div class="us-dist-item" style="--c:${canalCor(c.id)}">
+            <span class="us-dist-nome"><i></i>${esc(c.nome)}</span>
+            <span class="us-dist-pessoas">${pessoas.length
+              ? pessoas.map((u) => `<span title="${esc(u.nome || u.email)}">${htmlAvatar(u)}</span>`).join('')
+              : '<em>só admins</em>'}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </section>` : '';
+
+  return `
+    <div class="kpi">
+      <div class="card"><p class="muted">Pessoas</p><strong>${state.usuarios.length}</strong></div>
+      <div class="card"><p class="muted">Admins</p><strong>${state.usuarios.filter((u) => u.papel === 'admin').length}</strong></div>
+      <div class="card"><p class="muted">Membros</p><strong>${membros.length}</strong></div>
+      <div class="card"><p class="muted">Canais sem membro</p><strong class="${semNinguem.length ? 'text-alert' : ''}">${semNinguem.length}</strong></div>
+    </div>
+
+    <form class="card us-novo" id="us-novo-form" autocomplete="off">
+      <div class="us-novo-txt">
+        <h3>Convidar pessoa</h3>
+        <p class="muted">Ela entra com a conta Google deste e-mail. Depois escolha os canais.</p>
+      </div>
+      <input id="us-novo-email" type="email" placeholder="email@gmail.com" aria-label="E-mail" required>
+      <input id="us-novo-nome" type="text" placeholder="Nome (opcional)" aria-label="Nome">
+      <select id="us-novo-papel" aria-label="Papel">
+        <option value="membro">Membro</option>
+        <option value="admin">Admin</option>
+      </select>
+      <button class="btn primary" type="submit">Adicionar</button>
+    </form>
+
+    ${distribuicao}
+
+    <div class="us-lista-head">
+      <h3>Pessoas com acesso</h3>
+      <label class="us-busca">${ICO.busca}<input id="usuarios-busca" type="search" placeholder="Buscar pessoa" value="${esc(state.usuariosBusca)}"></label>
+    </div>
+    <div class="us-lista">
+      ${lista.map(htmlUsuarioCard).join('') || '<div class="empty">Ninguém encontrado.</div>'}
+    </div>
+    <p class="us-legenda muted"><strong>Admin</strong> vê todos os canais e gerencia usuários. <strong>Membro</strong> vê e edita só os canais liberados (e os itens gerais da Biblioteca); não cria nem exclui canais.</p>
+  `;
+}
+
 const TITULOS_ABA = {
   semana: 'Semana',
   canais: 'Canais',
   planejamento: 'Produção',
   anotacoes: 'Anotações',
   biblioteca: 'Biblioteca',
-  dashboard: 'Dashboard'
+  dashboard: 'Dashboard',
+  usuarios: 'Usuários'
 };
 
 function render() {
   if (state.canalAtivo && !canalById(state.canalAtivo)) setCanalAtivo('');
   renderCanalBar();
+  byId('canal-bar').classList.toggle('hide', state.tab === 'usuarios');
 
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === state.tab));
   const abrindoCanal = state.tab === 'canais' && state.canalAtivo;
-  byId('painel-titulo').textContent = state.canalAtivo && state.tab !== 'canais'
+  byId('painel-titulo').textContent = state.canalAtivo && !['canais', 'usuarios'].includes(state.tab)
     ? `${TITULOS_ABA[state.tab]} · ${canalNome(state.canalAtivo)}`
     : abrindoCanal ? 'Canal' : TITULOS_ABA[state.tab];
 
@@ -1954,6 +2220,24 @@ function render() {
   if (state.tab === 'anotacoes') content.innerHTML = htmlAnotacoes();
   if (state.tab === 'planejamento') content.innerHTML = htmlPlanejamento();
   if (state.tab === 'dashboard') content.innerHTML = htmlDashboard();
+  if (state.tab === 'usuarios') {
+    if (!state.usuariosCarregados) carregarUsuarios();
+    content.innerHTML = htmlUsuarios();
+    const busca = byId('usuarios-busca');
+    if (busca) busca.oninput = (e) => {
+      state.usuariosBusca = e.target.value;
+      const pos = e.target.selectionStart;
+      render();
+      const novo = byId('usuarios-busca');
+      novo.focus();
+      novo.setSelectionRange(pos, pos);
+    };
+    const form = byId('us-novo-form');
+    if (form) form.onsubmit = (e) => {
+      e.preventDefault();
+      adicionarUsuario();
+    };
+  }
   if (state.tab === 'biblioteca') {
     content.innerHTML = htmlBiblioteca();
     // A busca atualiza só a lista, para não perder o foco do campo.
@@ -1977,7 +2261,9 @@ function render() {
 // ---------- Eventos ----------
 
 function setTab(tab) {
+  if (tab === 'usuarios' && !isAdmin()) tab = 'canais';
   state.tab = tab;
+  if (tab === 'usuarios') carregarUsuarios(true);
   render();
 }
 
@@ -2094,6 +2380,8 @@ function bindEvents() {
   content.addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-action="status-video"]');
     if (sel) moverParaStatus(sel.dataset.id, sel.value);
+    const papel = e.target.closest('select[data-action="us-papel"]');
+    if (papel) salvarUsuario(papel.dataset.id, { papel: papel.value }, `Papel alterado para ${papel.value === 'admin' ? 'Admin' : 'Membro'}.`);
   });
 
   // Lembra quais blocos (Ideias, Publicados...) ficaram abertos.
@@ -2120,6 +2408,14 @@ function bindEvents() {
     if (el.tagName === 'A' && el.getAttribute('href') === '#') e.preventDefault();
 
     switch (action) {
+      case 'us-canal': return alternarCanalUsuario(id, value);
+      case 'us-todos': return salvarUsuario(id, { canais: state.canais.map((c) => c.id) }, 'Todos os canais liberados.');
+      case 'us-nenhum': return salvarUsuario(id, { canais: [] }, 'Canais retirados.');
+      case 'us-ativo': {
+        const u = usuarioByEmail(id);
+        return u && salvarUsuario(id, { ativo: !u.ativo }, u.ativo ? 'Acesso pausado.' : 'Acesso reativado.');
+      }
+      case 'us-del': return removerUsuario(id);
       case 'edit-video': return openVideoForm(id);
       case 'novo-recurso': return openRecursoForm();
       case 'edit-recurso': return openRecursoForm(id);
@@ -2212,6 +2508,10 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  try {
+    const meSalvo = JSON.parse(localStorage.getItem('gc_me') || 'null');
+    if (meSalvo) aplicarPapel(meSalvo);
+  } catch { /* ignora */ }
   loadCache(); // mostra a última cópia na hora, enquanto o banco responde
   render();
   atualizarBotaoSair();
