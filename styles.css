@@ -1994,7 +1994,161 @@ kbd {
   .agenda-dia-head .btn { opacity: 1; }
 }
 
-/* ---------- Login com Google ---------- */
-.google-login { margin-bottom: 14px; }
-.login-sep { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--muted, #888); font-size: 12px; }
-.login-sep::before, .login-sep::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .3; }
+/* ---------- Tela inicial / login ---------- */
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  overflow-y: auto;
+  background:
+    radial-gradient(700px 420px at 12% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
+    radial-gradient(600px 400px at 100% 100%, color-mix(in srgb, #2563eb 12%, transparent), transparent 70%),
+    var(--bg);
+}
+.landing {
+  min-height: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 48px 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) 380px;
+  gap: 64px;
+  align-items: center;
+}
+.landing-hero { animation: login-in .45s ease-out; }
+.landing-brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 15px; margin-bottom: 36px; }
+.login-logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: #fff;
+  background: linear-gradient(135deg, #fb7185, #e11d48);
+  box-shadow: 0 8px 24px color-mix(in srgb, #e11d48 40%, transparent);
+}
+.landing-title { font-size: clamp(2rem, 4vw, 3.1rem); line-height: 1.08; font-weight: 800; letter-spacing: -.03em; }
+.landing-title span {
+  background: linear-gradient(90deg, #fb7185, #e11d48 55%, #f97316);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.landing-sub { margin: 18px 0 28px; max-width: 540px; font-size: 16px; line-height: 1.6; color: var(--muted); }
+
+.landing-features { list-style: none; margin: 0 0 32px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 24px; max-width: 600px; }
+.landing-features li { display: flex; gap: 12px; align-items: flex-start; }
+.landing-features strong { display: block; font-size: 14px; margin-bottom: 2px; }
+.landing-features span:not(.lf-ico) { font-size: 13px; color: var(--muted); line-height: 1.45; }
+.lf-ico {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) var(--tint), transparent);
+}
+
+.landing-preview {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  max-width: 600px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  box-shadow: var(--shadow-lg);
+  transform: perspective(1200px) rotateX(6deg);
+  transform-origin: top center;
+  -webkit-mask-image: linear-gradient(#000 70%, transparent);
+  mask-image: linear-gradient(#000 70%, transparent);
+}
+.lp-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lp-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); padding: 2px 4px; }
+.lp-card {
+  position: relative;
+  padding: 9px 10px 9px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+}
+.lp-card i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.lp-card em { display: block; margin-top: 4px; font-style: normal; font-weight: 500; font-size: 11px; color: var(--faint); }
+.lp-card em b { color: var(--ok); }
+.lp-card.done em { color: var(--ok); }
+
+.login-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 28px 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-lg);
+  animation: login-in .45s .08s ease-out both;
+}
+@keyframes login-in { from { opacity: 0; transform: translateY(10px); } }
+.login-title { font-size: 1.3rem; font-weight: 700; }
+.login-sub { margin: 6px 0 22px; color: var(--muted); }
+
+.google-login { width: 100%; display: flex; justify-content: center; min-height: 44px; }
+/* O botão do Google é um iframe: sem isto ele ganha fundo branco no tema escuro. */
+.google-btn, .google-btn iframe, #credential_picker_container, #credential_picker_container iframe { color-scheme: normal; }
+
+.login-erro {
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) var(--tint), transparent);
+}
+
+.login-chave { width: 100%; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.login-chave summary { display: block; cursor: pointer; list-style: none; font-size: 13px; color: var(--faint); user-select: none; }
+.login-chave summary::-webkit-details-marker { display: none; }
+.login-chave summary::marker { content: ""; }
+.login-chave summary::before { content: none; display: none; }
+.login-chave summary:hover { color: var(--text); }
+.login-chave summary::after { content: " ›"; display: inline-block; transition: transform .15s; }
+.login-chave[open] summary::after { transform: rotate(90deg); }
+.login-chave-corpo { display: flex; gap: 8px; margin-top: 12px; }
+.login-chave-corpo input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  outline: none;
+}
+.login-chave-corpo input:focus { border-color: var(--text); }
+.login-dica { margin: 8px 0 0; font-size: 12px; color: var(--faint); text-align: left; }
+.login-foot { display: flex; align-items: center; gap: 6px; margin: 20px 0 0; font-size: 12px; color: var(--faint); }
+.login-foot a { color: var(--faint); }
+
+@media (max-width: 900px) {
+  .landing { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 28px 20px 40px; max-width: 560px; align-content: start; }
+  /* No celular: marca, título, texto, login e só depois os recursos. */
+  .landing-hero { display: contents; }
+  .landing-brand { order: 1; margin-bottom: 22px; }
+  .landing-title { order: 2; }
+  .landing-sub { order: 3; margin-bottom: 24px; font-size: 15px; }
+  .login-card { order: 4; }
+  .landing-features { order: 5; grid-template-columns: minmax(0, 1fr); margin: 32px 0 0; }
+  .landing-preview { display: none; }
+}
+body.sem-login { overflow: hidden; }
+body.sem-login .toast { display: none !important; }

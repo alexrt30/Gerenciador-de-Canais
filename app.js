@@ -218,7 +218,6 @@ function iniciarGoogle() {
     callback: (resp) => {
       if (!resp?.credential) return;
       localStorage.setItem(GOOGLE_TOKEN_STORAGE, resp.credential);
-      byId('google-erro')?.classList.add('hide');
       showKeyForm(false);
       atualizarBotaoSair();
       if (googleResolve) {
@@ -232,7 +231,10 @@ function iniciarGoogle() {
   google.accounts.id.renderButton(byId('google-btn'), {
     theme: document.documentElement.dataset.theme === 'dark' ? 'filled_black' : 'outline',
     size: 'large',
-    text: 'signin_with',
+    shape: 'pill',
+    text: 'continue_with',
+    logo_alignment: 'center',
+    width: Math.max(220, Math.min(316, window.innerWidth - 98)), // cabe no cartão até no celular
     locale: 'pt-BR'
   });
   byId('google-login')?.classList.remove('hide');
@@ -288,10 +290,17 @@ function sair() {
 
 // Mostra o campo para digitar a chave de acesso (fica salva só neste navegador).
 function showKeyForm(show = true) {
-  const form = byId('key-form');
-  if (!form) return;
-  form.classList.toggle('hide', !show);
-  if (show) setTimeout(() => byId('api-key-input')?.focus(), 0);
+  const tela = byId('login-screen');
+  if (!tela) return;
+  tela.classList.toggle('hide', !show);
+  document.body.classList.toggle('sem-login', show);
+  if (!show) return;
+  // Sem Google configurado, a chave é o único caminho: já abre o campo.
+  esperarGoogle().then((temGoogle) => {
+    const chave = byId('login-chave');
+    if (!temGoogle && chave) chave.open = true;
+    if (chave?.open) byId('api-key-input')?.focus();
+  });
 }
 
 async function apiRequest(method, path, body, tentouRenovar = false) {
@@ -325,7 +334,7 @@ async function apiRequest(method, path, body, tentouRenovar = false) {
     const eraGoogle = key === localStorage.getItem(GOOGLE_TOKEN_STORAGE);
     localStorage.removeItem(eraGoogle ? GOOGLE_TOKEN_STORAGE : API_KEY_STORAGE);
     atualizarBotaoSair();
-    if (eraGoogle && payload?.error) {
+    if (payload?.error) {
       const erro = byId('google-erro');
       if (erro) {
         erro.textContent = payload.error;
@@ -425,6 +434,7 @@ async function loadData() {
     const payload = await apiRequest('GET', '/api/data');
     applyData(payload.data);
     saveCache();
+    byId('google-erro')?.classList.add('hide');
     state.syncMessage = `Banco: dados carregados às ${new Date().toLocaleTimeString('pt-BR')}`;
     return true;
   } catch (error) {
