@@ -5,6 +5,8 @@ compatibility_date = "2026-10-01"
 # Origens que podem chamar a API (GitHub Pages + testes locais), separadas por vírgula.
 [vars]
 ALLOWED_ORIGINS = "https://alexrt30.github.io,http://localhost:8751,http://127.0.0.1:8751"
+# Login com Google: o mesmo Client ID (Web) que está em GOOGLE_CLIENT_ID no app.js. Vazio = desligado.
+GOOGLE_CLIENT_ID = "209332478186-t03nsg683l9ufb59b9mm2r1rjv34q7e1.apps.googleusercontent.com"
 
 [[d1_databases]]
 binding = "DB"
@@ -14,3 +16,6 @@ migrations_dir = "migrations"
 
 # A chave de acesso NÃO fica aqui. Em produção: `npx wrangler secret put API_KEY`.
 # Para testes locais: arquivo worker/.dev.vars com `API_KEY=...` (fora do git).
+
+# E-mails que podem entrar com Google (separados por vírgula) ficam como secret, fora do git:
+#   npx wrangler secret put ALLOWED_EMAILS

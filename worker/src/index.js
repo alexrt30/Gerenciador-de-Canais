@@ -1,6 +1,7 @@
 // API do Gerenciador de Canais: Cloudflare Worker + D1 (SQLite).
 //
-// Rotas (todas exigem `Authorization: Bearer <API_KEY>`):
+// Rotas (todas exigem `Authorization: Bearer <API_KEY>` ou `Bearer <ID token do Google>`
+// de um e-mail listado em ALLOWED_EMAILS):
 //   GET    /api/data              -> { ok, data: { canais, videos } }
 //   PUT    /api/canais/:id        -> cria/atualiza canal
 //   DELETE /api/canais/:id        -> apaga canal (e os vídeos dele)
@@ -25,11 +26,12 @@ export default {
     }
 
     try {
-      if (!env.API_KEY) {
-        return json({ ok: false, error: 'API_KEY não configurada no servidor' }, 500, cors);
+      if (!env.API_KEY && !env.GOOGLE_CLIENT_ID) {
+        return json({ ok: false, error: 'Nenhum método de acesso configurado no servidor' }, 500, cors);
       }
-      if (!(await isAuthorized(request, env.API_KEY))) {
-        return json({ ok: false, error: 'Chave de acesso inválida' }, 401, cors);
+      const auth = await authorize(request, env);
+      if (!auth.ok) {
+        return json({ ok: false, error: auth.error }, 401, cors);
       }
 
       const url = new URL(request.url);
@@ -92,10 +94,91 @@ class HttpError extends Error {
 
 // ---------- autenticação / CORS ----------
 
-async function isAuthorized(request, apiKey) {
+async function authorize(request, env) {
   const header = request.headers.get('Authorization') || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token) return false;
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) return { ok: false, error: 'Faça login' };
+
+  // ID token do Google = JWT (três partes separadas por ponto).
+  if (/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) {
+    if (!env.GOOGLE_CLIENT_ID) return { ok: false, error: 'Login com Google não configurado no servidor' };
+    try {
+      const claims = await verifyGoogleIdToken(token, env.GOOGLE_CLIENT_ID);
+      const allowed = String(env.ALLOWED_EMAILS || '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      const email = String(claims.email || '').toLowerCase();
+      if (!claims.email_verified || !allowed.includes(email)) {
+        return { ok: false, error: `A conta ${email || 'Google'} não tem acesso` };
+      }
+      return { ok: true, user: email };
+    } catch (err) {
+      return { ok: false, error: `Login do Google inválido (${err.message})` };
+    }
+  }
+
+  if (env.API_KEY && (await isApiKey(token, env.API_KEY))) return { ok: true, user: 'api-key' };
+  return { ok: false, error: 'Chave de acesso inválida' };
+}
+
+// --- verificação do ID token do Google (RS256, chaves públicas do Google) ---
+
+const GOOGLE_CERTS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+let googleKeysCache = { keys: null, expires: 0 };
+
+async function getGoogleKeys(forceRefresh = false) {
+  if (!forceRefresh && googleKeysCache.keys && Date.now() < googleKeysCache.expires) {
+    return googleKeysCache.keys;
+  }
+  const res = await fetch(GOOGLE_CERTS_URL);
+  if (!res.ok) throw new Error('não consegui buscar as chaves do Google');
+  const { keys } = await res.json();
+  const maxAge = Number(/max-age=(\d+)/.exec(res.headers.get('Cache-Control') || '')?.[1] || 3600);
+  googleKeysCache = { keys, expires: Date.now() + maxAge * 1000 };
+  return keys;
+}
+
+function b64urlToBytes(s) {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4);
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function verifyGoogleIdToken(token, clientId) {
+  const [h, p, sig] = token.split('.');
+  const header = JSON.parse(new TextDecoder().decode(b64urlToBytes(h)));
+  const claims = JSON.parse(new TextDecoder().decode(b64urlToBytes(p)));
+  if (header.alg !== 'RS256') throw new Error('algoritmo inesperado');
+
+  let jwk = (await getGoogleKeys()).find((k) => k.kid === header.kid);
+  if (!jwk) jwk = (await getGoogleKeys(true)).find((k) => k.kid === header.kid);
+  if (!jwk) throw new Error('chave de assinatura desconhecida');
+
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: 'RS256', ext: true },
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+  const valid = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    b64urlToBytes(sig),
+    new TextEncoder().encode(`${h}.${p}`)
+  );
+  if (!valid) throw new Error('assinatura inválida');
+
+  const now = Math.floor(Date.now() / 1000);
+  const auds = String(clientId).split(',').map((s) => s.trim());
+  if (!auds.includes(claims.aud)) throw new Error('token de outro app');
+  if (!GOOGLE_ISSUERS.includes(claims.iss)) throw new Error('emissor inválido');
+  if (!(claims.exp > now - 60)) throw new Error('sessão expirada');
+  return claims;
+}
+
+async function isApiKey(token, apiKey) {
   // Compara os hashes para não vazar informação pelo tempo de resposta.
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([

@@ -11,6 +11,9 @@ const API_KEY_LOCAL = 'teste-local-gerenciador';
 const USA_API_LOCAL = IS_LOCALHOST && !API_URL_OVERRIDE;
 const API_KEY_STORAGE = USA_API_LOCAL ? 'gc_api_key_local' : 'gc_api_key';
 const CACHE_STORAGE = 'gc_cache_v2';
+// Login com Google: Client ID (Web) criado no Google Cloud Console. Vazio = só chave de acesso.
+const GOOGLE_CLIENT_ID = '209332478186-t03nsg683l9ufb59b9mm2r1rjv34q7e1.apps.googleusercontent.com';
+const GOOGLE_TOKEN_STORAGE = 'gc_google_token';
 
 // ---------- Domínio ----------
 
@@ -165,7 +168,122 @@ function canUseApi() {
 }
 
 function getApiKey() {
-  return localStorage.getItem(API_KEY_STORAGE) || (USA_API_LOCAL ? API_KEY_LOCAL : '');
+  return getGoogleToken() || localStorage.getItem(API_KEY_STORAGE) || (USA_API_LOCAL ? API_KEY_LOCAL : '');
+}
+
+// ---------- Login com Google (Google Identity Services) ----------
+
+function decodeJwt(token) {
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(decodeURIComponent(escape(atob(part))));
+  } catch {
+    return null;
+  }
+}
+
+// Devolve o ID token salvo se ainda estiver válido (vale ~1 h).
+function getGoogleToken() {
+  const token = localStorage.getItem(GOOGLE_TOKEN_STORAGE) || '';
+  const claims = token ? decodeJwt(token) : null;
+  if (!claims || claims.exp * 1000 < Date.now() + 60_000) {
+    if (token) localStorage.removeItem(GOOGLE_TOKEN_STORAGE);
+    return '';
+  }
+  return token;
+}
+
+function googleDisponivel() {
+  return Boolean(GOOGLE_CLIENT_ID && window.google?.accounts?.id);
+}
+
+function atualizarBotaoSair() {
+  const logado = Boolean(getGoogleToken() || localStorage.getItem(API_KEY_STORAGE));
+  byId('btn-sair')?.classList.toggle('hide', !logado);
+  const claims = decodeJwt(getGoogleToken());
+  const btn = byId('btn-sair');
+  if (btn) btn.title = claims?.email ? `Sair (${claims.email})` : 'Sair';
+}
+
+let googleIniciado = false;
+let googleResolve = null;
+
+function iniciarGoogle() {
+  if (googleIniciado || !googleDisponivel()) return googleIniciado;
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    auto_select: true,
+    cancel_on_tap_outside: true,
+    use_fedcm_for_prompt: true,
+    callback: (resp) => {
+      if (!resp?.credential) return;
+      localStorage.setItem(GOOGLE_TOKEN_STORAGE, resp.credential);
+      byId('google-erro')?.classList.add('hide');
+      showKeyForm(false);
+      atualizarBotaoSair();
+      if (googleResolve) {
+        googleResolve(true);
+        googleResolve = null;
+      } else {
+        loadData();
+      }
+    }
+  });
+  google.accounts.id.renderButton(byId('google-btn'), {
+    theme: document.documentElement.dataset.theme === 'dark' ? 'filled_black' : 'outline',
+    size: 'large',
+    text: 'signin_with',
+    locale: 'pt-BR'
+  });
+  byId('google-login')?.classList.remove('hide');
+  googleIniciado = true;
+  return true;
+}
+
+// Espera o script do Google carregar (ele vem com async).
+function esperarGoogle(ms = 4000) {
+  if (!GOOGLE_CLIENT_ID) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    (function tick() {
+      if (window.google?.accounts?.id) return resolve(iniciarGoogle());
+      if (Date.now() - t0 > ms) return resolve(false);
+      setTimeout(tick, 100);
+    })();
+  });
+}
+
+// Tenta renovar o login sem clique (One Tap / auto_select). Resolve true se conseguiu.
+async function renovarGoogleSilencioso() {
+  if (!(await esperarGoogle())) return false;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      googleResolve = null;
+      resolve(false);
+    }, 8000);
+    googleResolve = (ok) => {
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    google.accounts.id.prompt((n) => {
+      if (n.isNotDisplayed?.() || n.isSkippedMoment?.() || n.isDismissedMoment?.()) {
+        if (googleResolve) {
+          clearTimeout(timer);
+          googleResolve = null;
+          resolve(false);
+        }
+      }
+    });
+  });
+}
+
+function sair() {
+  localStorage.removeItem(GOOGLE_TOKEN_STORAGE);
+  localStorage.removeItem(API_KEY_STORAGE);
+  if (googleDisponivel()) google.accounts.id.disableAutoSelect();
+  atualizarBotaoSair();
+  showKeyForm(true);
+  setStatus('Você saiu. Entre de novo para carregar os dados.');
 }
 
 // Mostra o campo para digitar a chave de acesso (fica salva só neste navegador).
@@ -176,12 +294,15 @@ function showKeyForm(show = true) {
   if (show) setTimeout(() => byId('api-key-input')?.focus(), 0);
 }
 
-async function apiRequest(method, path, body) {
+async function apiRequest(method, path, body, tentouRenovar = false) {
   if (!canUseApi()) throw new Error('URL da API não configurada (API_URL_PRODUCAO no app.js)');
-  const key = getApiKey();
+  let key = getApiKey();
+  if (!key && GOOGLE_CLIENT_ID && !tentouRenovar && (await renovarGoogleSilencioso())) {
+    key = getApiKey();
+  }
   if (!key) {
     showKeyForm(true);
-    throw new Error('informe a chave de acesso');
+    throw new Error(GOOGLE_CLIENT_ID ? 'faça login com o Google ou informe a chave' : 'informe a chave de acesso');
   }
 
   const response = await fetch(`${API_URL}${path}`, {
@@ -201,9 +322,18 @@ async function apiRequest(method, path, body) {
   }
 
   if (response.status === 401) {
-    localStorage.removeItem(API_KEY_STORAGE);
+    const eraGoogle = key === localStorage.getItem(GOOGLE_TOKEN_STORAGE);
+    localStorage.removeItem(eraGoogle ? GOOGLE_TOKEN_STORAGE : API_KEY_STORAGE);
+    atualizarBotaoSair();
+    if (eraGoogle && payload?.error) {
+      const erro = byId('google-erro');
+      if (erro) {
+        erro.textContent = payload.error;
+        erro.classList.remove('hide');
+      }
+    }
     showKeyForm(true);
-    throw new Error('chave de acesso inválida — informe de novo');
+    throw new Error(payload?.error ? `${payload.error} — entre de novo` : 'acesso negado — entre de novo');
   }
   if (!response.ok || !payload?.ok) {
     throw new Error(payload?.error || `HTTP ${response.status}`);
@@ -1911,8 +2041,11 @@ function bindEvents() {
     localStorage.setItem(API_KEY_STORAGE, key);
     byId('api-key-input').value = '';
     showKeyForm(false);
+    atualizarBotaoSair();
     loadData();
   };
+
+  byId('btn-sair').onclick = () => sair();
 
   byId('search').oninput = (e) => {
     state.search = e.target.value;
@@ -2071,6 +2204,8 @@ async function init() {
   bindEvents();
   loadCache(); // mostra a última cópia na hora, enquanto o banco responde
   render();
+  atualizarBotaoSair();
+  esperarGoogle(); // desenha o botão "Fazer login com o Google" assim que o script carregar
 
   if (canUseApi()) {
     await loadData();
