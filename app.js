@@ -287,6 +287,9 @@ async function renovarGoogleSilencioso() {
 
 function sair() {
   localStorage.removeItem('gc_me');
+  localStorage.removeItem(CACHE_STORAGE); // não deixa os dados para a próxima pessoa no mesmo navegador
+  applyData({ canais: [], videos: [], recursos: [] });
+  render();
   state.usuarios = [];
   state.usuariosCarregados = false;
   localStorage.removeItem(GOOGLE_TOKEN_STORAGE);
@@ -393,7 +396,8 @@ function applyData(data) {
     nicho: String(canal.nicho || ''),
     descricao: String(canal.descricao || ''),
     cor: safeColor(canal.cor),
-    anotacoes: serializeCanalNotes(parseCanalNotes(canal.anotacoes))
+    anotacoes: serializeCanalNotes(parseCanalNotes(canal.anotacoes)),
+    podeExcluir: canal.podeExcluir !== false
   }));
 
   state.recursos = (Array.isArray(data?.recursos) ? data.recursos : []).map((r) => ({
@@ -1251,7 +1255,7 @@ function htmlCanais() {
 function htmlCanaisLista() {
   if (!state.canais.length) {
     if (state.me && !isAdmin()) {
-      return `<div class="cv-vazio"><p>Você ainda não tem canais liberados.</p><p class="muted">Peça a um administrador para liberar os canais em que você trabalha.</p></div>`;
+      return `<div class="cv-vazio"><p><strong>Bem-vindo!</strong> Seu espaço está pronto.</p><p class="muted">Cadastre seu primeiro canal para começar a planejar os vídeos. Só você vê o que criar aqui.</p><button class="btn primary" data-action="novo-canal">+ Criar meu primeiro canal</button></div>`;
     }
     return `<div class="cv-vazio"><p>Nenhum canal cadastrado ainda.</p><button class="btn primary" data-action="novo-canal">+ Criar o primeiro canal</button></div>`;
   }
@@ -1340,7 +1344,7 @@ function htmlCanaisLista() {
           <span class="cv-acoes">
             ${link ? `<a class="cv-icon" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-stop title="Abrir no YouTube" aria-label="Abrir no YouTube">${ICO.externo}</a>` : ''}
             <button class="cv-icon" data-action="edit-canal" data-id="${esc(c.id)}" title="Editar canal" aria-label="Editar canal">${ICO.editar}</button>
-            <button class="cv-icon danger" data-action="del-canal" data-id="${esc(c.id)}" title="Excluir canal" aria-label="Excluir canal">${ICO.lixo}</button>
+            ${c.podeExcluir === false ? '' : `<button class="cv-icon danger" data-action="del-canal" data-id="${esc(c.id)}" title="Excluir canal" aria-label="Excluir canal">${ICO.lixo}</button>`}
           </span>
         </footer>
       </article>
@@ -2053,7 +2057,7 @@ function htmlUsuarioCard(u) {
 
   let acesso;
   if (u.papel === 'admin') {
-    acesso = `<p class="us-tudo">${u.dono ? 'Dono do sistema: ' : ''}vê e edita <strong>todos os canais</strong>${u.dono ? '' : ' e gerencia usuários'}.</p>`;
+    acesso = `<p class="us-tudo">${u.dono ? 'Dono do sistema: ' : ''}vê e edita <strong>todos os canais da equipe</strong>${u.dono ? '' : ' e gerencia usuários'}.</p>`;
   } else if (!canais.length) {
     acesso = '<p class="us-tudo">Ainda não há canais para distribuir.</p>';
   } else {
@@ -2075,6 +2079,9 @@ function htmlUsuarioCard(u) {
       </div>`;
   }
 
+  const proprios = (u.proprios || []).length
+    ? `<p class="us-proprios"><span>Canais próprios</span>${u.proprios.map((p) => `<b>${esc(p.nome)}</b><em>${p.videos} vídeo${p.videos === 1 ? '' : 's'}</em>`).join('')}</p>`
+    : '';
   const status = u.dono
     ? 'definido no servidor'
     : !u.ativo ? 'acesso pausado'
@@ -2085,7 +2092,7 @@ function htmlUsuarioCard(u) {
       <header class="us-top">
         ${htmlAvatar(u)}
         <div class="us-id">
-          <strong>${esc(u.nome || u.email.replace(/@.*/, ''))}${ehVoce ? ' <span class="us-voce">você</span>' : ''}</strong>
+          <strong>${esc(u.nome || u.email.replace(/@.*/, ''))}${ehVoce ? ' <span class="us-voce">você</span>' : ''}${u.origem === 'cadastro' ? ' <span class="us-origem" title="Entrou sozinho com Google">cadastro</span>' : ''}</strong>
           <span>${esc(u.email)}</span>
           <em>${esc(status)}</em>
         </div>
@@ -2101,6 +2108,7 @@ function htmlUsuarioCard(u) {
         </div>
       </header>
       ${acesso}
+      ${proprios}
     </article>`;
 }
 
@@ -2135,13 +2143,14 @@ function htmlUsuarios() {
       <div class="card"><p class="muted">Pessoas</p><strong>${state.usuarios.length}</strong></div>
       <div class="card"><p class="muted">Admins</p><strong>${state.usuarios.filter((u) => u.papel === 'admin').length}</strong></div>
       <div class="card"><p class="muted">Membros</p><strong>${membros.length}</strong></div>
+      <div class="card"><p class="muted">Cadastros próprios</p><strong>${state.usuarios.filter((u) => u.origem === 'cadastro').length}</strong></div>
       <div class="card"><p class="muted">Canais sem membro</p><strong class="${semNinguem.length ? 'text-alert' : ''}">${semNinguem.length}</strong></div>
     </div>
 
     <form class="card us-novo" id="us-novo-form" autocomplete="off">
       <div class="us-novo-txt">
-        <h3>Convidar pessoa</h3>
-        <p class="muted">Ela entra com a conta Google deste e-mail. Depois escolha os canais.</p>
+        <h3>Adicionar pessoa à equipe</h3>
+        <p class="muted">Ela entra com a conta Google deste e-mail. Depois escolha os canais da equipe que ela pode ver.</p>
       </div>
       <input id="us-novo-email" type="email" placeholder="email@gmail.com" aria-label="E-mail" required>
       <input id="us-novo-nome" type="text" placeholder="Nome (opcional)" aria-label="Nome">
@@ -2161,7 +2170,7 @@ function htmlUsuarios() {
     <div class="us-lista">
       ${lista.map(htmlUsuarioCard).join('') || '<div class="empty">Ninguém encontrado.</div>'}
     </div>
-    <p class="us-legenda muted"><strong>Admin</strong> vê todos os canais e gerencia usuários. <strong>Membro</strong> vê e edita só os canais liberados (e os itens gerais da Biblioteca); não cria nem exclui canais.</p>
+    <p class="us-legenda muted"><strong>Admin</strong> vê todos os canais e gerencia usuários. <strong>Membro</strong> tem o próprio espaço (canais, vídeos e biblioteca que criar) e vê também os canais da equipe que você liberar. Qualquer conta Google pode se cadastrar; use <strong>pausar</strong> para bloquear alguém.</p>
   `;
 }
 

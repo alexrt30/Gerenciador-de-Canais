@@ -1,9 +1,11 @@
 // API do Gerenciador de Canais: Cloudflare Worker + D1 (SQLite).
 //
 // Acesso: `Authorization: Bearer <API_KEY>` (admin) ou `Bearer <ID token do Google>`.
-// Quem entra com Google: e-mails do secret ALLOWED_EMAILS são admins fixos (donos);
-// os demais precisam estar na tabela `usuarios` (cadastrados por um admin).
-// Papéis: admin vê e edita tudo; membro só os canais ligados a ele (usuario_canais).
+// Quem entra com Google: e-mails do secret ALLOWED_EMAILS são admins fixos (donos).
+// Com CADASTRO_ABERTO=1, qualquer conta Google entra e ganha o próprio espaço (membro);
+// sem ele, só quem um admin cadastrou na tabela `usuarios`.
+// Papéis: admin trabalha no espaço da equipe (canais sem dono) e gerencia usuários;
+// membro vê os canais que criou (dono_email) e os que um admin liberou (usuario_canais).
 //
 // Rotas:
 //   GET    /api/data              -> { ok, data: { canais, videos, recursos }, me }
@@ -25,6 +27,7 @@ const TIPOS = ['short', 'longo', 'live', 'post'];
 const TIPOS_RECURSO = ['prompt', 'skill', 'link', 'referencia', 'outro'];
 const PAPEIS = ['admin', 'membro'];
 const MAX_TEXT = 20000;
+const MAX_CANAIS_PROPRIOS = 30;
 
 export default {
   async fetch(request, env) {
@@ -98,7 +101,7 @@ export default {
           const body = await readJson(request);
           await checarEscrita(env.DB, me, resource, id, body);
           const upsert = { canais: upsertCanal, videos: upsertVideo, recursos: upsertRecurso }[resource];
-          const saved = await upsert(env.DB, { ...body, id });
+          const saved = await upsert(env.DB, { ...body, id }, donoDe(me));
           return json({ ok: true, item: saved }, 200, cors);
         }
 
@@ -169,13 +172,25 @@ function podeCanal(me, canalId) {
   return me.papel === 'admin' || Boolean(canalId && me.canais?.has(canalId));
 }
 
+// Dono gravado nos itens novos: '' = espaço da equipe (admins); e-mail = espaço da pessoa.
+function donoDe(me) {
+  return me.papel === 'admin' ? '' : me.email;
+}
+
 function filtrarPara(me, data) {
-  if (me.papel === 'admin') return data;
+  const admin = me.papel === 'admin';
+  // Admin: canais da equipe e os que ele mesmo criou quando era membro.
+  const vejoCanal = (c) => (admin ? !c.dono || c.dono === me.email : me.canais.has(c.id));
+  const canais = data.canais.filter(vejoCanal);
+  const ids = new Set(canais.map((c) => c.id));
+  const meuEspaco = admin ? (d) => !d || d === me.email : (d) => d === me.email;
   return {
-    canais: data.canais.filter((c) => me.canais.has(c.id)),
-    videos: data.videos.filter((v) => me.canais.has(v.canalId)),
-    // Biblioteca: itens gerais (sem canal) + os dos canais da pessoa.
-    recursos: data.recursos.filter((r) => !r.canalId || me.canais.has(r.canalId))
+    canais: canais.map(({ dono, ...c }) => ({ ...c, podeExcluir: admin || dono === me.email })),
+    videos: data.videos.filter((v) => ids.has(v.canalId)),
+    // Biblioteca: itens dos canais visíveis + itens gerais do próprio espaço.
+    recursos: data.recursos
+      .filter((r) => (r.canalId ? ids.has(r.canalId) : meuEspaco(r.dono)))
+      .map(({ dono, ...r }) => r)
   };
 }
 
@@ -184,16 +199,28 @@ async function checarEscrita(db, me, resource, id, body) {
   const negar = () => { throw new HttpError(403, 'Você não tem acesso a este canal'); };
 
   if (resource === 'canais') {
-    const existe = await db.prepare('SELECT 1 FROM canais WHERE id = ?').bind(id).first();
-    if (!existe || !body) throw new HttpError(403, 'Só administradores criam ou excluem canais');
+    const atual = await db.prepare('SELECT dono_email FROM canais WHERE id = ?').bind(id).first();
+    if (!atual) {
+      if (!body) return; // apagar algo que não existe: sem efeito
+      const { n } = await db.prepare('SELECT COUNT(*) AS n FROM canais WHERE dono_email = ?').bind(me.email).first();
+      if (n >= MAX_CANAIS_PROPRIOS) throw new HttpError(403, `Limite de ${MAX_CANAIS_PROPRIOS} canais por pessoa`);
+      return; // canal novo: fica no espaço da pessoa
+    }
+    if (!body && atual.dono_email !== me.email) throw new HttpError(403, 'Só quem criou o canal (ou um admin) pode excluí-lo');
     if (!podeCanal(me, id)) negar();
     return;
   }
 
   const table = resource === 'videos' ? 'videos' : 'recursos';
-  const atual = await db.prepare(`SELECT canal_id FROM ${table} WHERE id = ?`).bind(id).first();
-  // Item existente: precisa ter acesso ao canal de hoje (recurso geral é livre).
-  if (atual && (atual.canal_id || resource === 'videos') && !podeCanal(me, atual.canal_id)) negar();
+  const cols = resource === 'videos' ? 'canal_id' : 'canal_id, dono_email';
+  const atual = await db.prepare(`SELECT ${cols} FROM ${table} WHERE id = ?`).bind(id).first();
+  if (atual) {
+    if (atual.canal_id) {
+      if (!podeCanal(me, atual.canal_id)) negar();
+    } else if (resource === 'videos' || atual.dono_email !== me.email) {
+      throw new HttpError(403, 'Este item não é seu');
+    }
+  }
   // Destino do item (PUT): precisa ter acesso ao canal novo.
   if (body) {
     const destino = String(body.canalId || '').trim();
@@ -205,15 +232,27 @@ async function carregarUsuario(env, email, claims) {
   if (donos(env).includes(email)) {
     return { email, nome: claims?.name || '', foto: claims?.picture || '', papel: 'admin', dono: true, canais: null };
   }
-  const u = await env.DB.prepare('SELECT * FROM usuarios WHERE email = ? AND ativo = 1').bind(email).first();
-  if (!u) return null;
+  let u = await env.DB.prepare('SELECT * FROM usuarios WHERE email = ?').bind(email).first();
+  const agora = new Date();
+  if (!u) {
+    // Cadastro aberto: a primeira entrada com Google cria o espaço da pessoa.
+    if (!claims || env.CADASTRO_ABERTO !== '1') return null;
+    await env.DB.prepare(
+      `INSERT INTO usuarios (email, nome, foto, papel, origem, ultimo_acesso)
+       VALUES (?1, ?2, ?3, 'membro', 'cadastro', ?4) ON CONFLICT(email) DO NOTHING`
+    ).bind(email, String(claims.name || '').slice(0, 200), String(claims.picture || '').slice(0, 500), agora.toISOString()).run();
+    u = await env.DB.prepare('SELECT * FROM usuarios WHERE email = ?').bind(email).first();
+    if (!u) return null;
+  }
+  if (!u.ativo) return null; // acesso pausado por um admin
   let canais = null;
   if (u.papel !== 'admin') {
-    const rs = await env.DB.prepare('SELECT canal_id FROM usuario_canais WHERE email = ?').bind(email).all();
-    canais = new Set(rs.results.map((r) => r.canal_id));
+    const rs = await env.DB.prepare(
+      'SELECT canal_id AS id FROM usuario_canais WHERE email = ?1 UNION SELECT id FROM canais WHERE dono_email = ?1'
+    ).bind(email).all();
+    canais = new Set(rs.results.map((r) => r.id));
   }
   // Guarda nome/foto do Google e a hora do acesso (no máximo a cada 5 min).
-  const agora = new Date();
   if (claims && (!u.ultimo_acesso || agora - new Date(u.ultimo_acesso) > 5 * 60 * 1000)) {
     await env.DB.prepare(
       `UPDATE usuarios SET ultimo_acesso = ?2,
@@ -224,12 +263,17 @@ async function carregarUsuario(env, email, claims) {
 }
 
 async function listarUsuarios(env) {
-  const [us, links] = await env.DB.batch([
-    env.DB.prepare('SELECT * FROM usuarios ORDER BY papel, nome COLLATE NOCASE, email'),
-    env.DB.prepare('SELECT email, canal_id FROM usuario_canais')
+  const [us, links, proprios] = await env.DB.batch([
+    env.DB.prepare('SELECT * FROM usuarios ORDER BY papel, created_at DESC'),
+    env.DB.prepare('SELECT email, canal_id FROM usuario_canais'),
+    env.DB.prepare(`SELECT c.dono_email AS email, c.nome, COUNT(v.id) AS videos
+                    FROM canais c LEFT JOIN videos v ON v.canal_id = c.id
+                    WHERE c.dono_email <> '' GROUP BY c.id ORDER BY c.nome COLLATE NOCASE`)
   ]);
   const porEmail = {};
   links.results.forEach((l) => (porEmail[l.email] ||= []).push(l.canal_id));
+  const propriosPor = {};
+  proprios.results.forEach((p) => (propriosPor[p.email] ||= []).push({ nome: p.nome, videos: p.videos }));
   const lista = us.results
     .filter((u) => !donos(env).includes(u.email))
     .map((u) => ({
@@ -241,14 +285,16 @@ async function listarUsuarios(env) {
       dono: false,
       ultimoAcesso: u.ultimo_acesso,
       criadoEm: u.created_at,
+      origem: u.origem || 'convite',
+      proprios: propriosPor[u.email] || [],
       canais: porEmail[u.email] || []
     }));
-  const fixos = donos(env).map((email) => ({ email, nome: '', foto: '', papel: 'admin', ativo: true, dono: true, ultimoAcesso: '', canais: [] }));
+  const fixos = donos(env).map((email) => ({ email, nome: '', foto: '', papel: 'admin', ativo: true, dono: true, ultimoAcesso: '', origem: 'convite', proprios: [], canais: [] }));
   return [...fixos, ...lista];
 }
 
 async function todosCanaisIds(db) {
-  const rs = await db.prepare('SELECT id FROM canais').all();
+  const rs = await db.prepare("SELECT id FROM canais WHERE dono_email = ''").all();
   return rs.results.map((r) => r.id);
 }
 
@@ -298,7 +344,7 @@ async function authorize(request, env) {
     // Só para testes locais: DEV_IMPERSONATE=1 no .dev.vars permite agir como outro e-mail.
     const como = env.DEV_IMPERSONATE === '1' ? normEmail(request.headers.get('X-Dev-As')) : '';
     if (como) {
-      const user = await carregarUsuario(env, como, null);
+      const user = await carregarUsuario(env, como, { name: '', picture: '' }); // simula um login Google
       if (!user) return { ok: false, error: `A conta ${como} não tem acesso. Peça a um administrador.` };
       return { ok: true, user };
     }
@@ -538,8 +584,8 @@ function cleanRecurso(input) {
 // ---------- SQL ----------
 
 const UPSERT_CANAL = `
-  INSERT INTO canais (id, nome, url, nicho, descricao, anotacoes, cor)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+  INSERT INTO canais (id, nome, url, nicho, descricao, anotacoes, cor, dono_email)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
   ON CONFLICT(id) DO UPDATE SET
     nome = excluded.nome, url = excluded.url, nicho = excluded.nicho,
     descricao = excluded.descricao, anotacoes = excluded.anotacoes, cor = excluded.cor,
@@ -558,8 +604,8 @@ const UPSERT_VIDEO = `
     url = excluded.url, notas = excluded.notas,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
-function canalStmt(db, c) {
-  return db.prepare(UPSERT_CANAL).bind(c.id, c.nome, c.url, c.nicho, c.descricao, c.anotacoes, c.cor);
+function canalStmt(db, c, dono = '') {
+  return db.prepare(UPSERT_CANAL).bind(c.id, c.nome, c.url, c.nicho, c.descricao, c.anotacoes, c.cor, dono);
 }
 
 function videoStmt(db, v) {
@@ -569,9 +615,9 @@ function videoStmt(db, v) {
   );
 }
 
-async function upsertCanal(db, input) {
+async function upsertCanal(db, input, dono = '') {
   const canal = cleanCanal(input);
-  await canalStmt(db, canal).run();
+  await canalStmt(db, canal, dono).run();
   return canal;
 }
 
@@ -584,22 +630,22 @@ async function upsertVideo(db, input) {
 }
 
 const UPSERT_RECURSO = `
-  INSERT INTO recursos (id, tipo, titulo, conteudo, url, tags, canal_id, favorito)
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+  INSERT INTO recursos (id, tipo, titulo, conteudo, url, tags, canal_id, favorito, dono_email)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
   ON CONFLICT(id) DO UPDATE SET
     tipo = excluded.tipo, titulo = excluded.titulo, conteudo = excluded.conteudo,
     url = excluded.url, tags = excluded.tags, canal_id = excluded.canal_id,
     favorito = excluded.favorito,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
-async function upsertRecurso(db, input) {
+async function upsertRecurso(db, input, dono = '') {
   const r = cleanRecurso(input);
   if (r.canalId) {
     const canal = await db.prepare('SELECT 1 FROM canais WHERE id = ?').bind(r.canalId).first();
     if (!canal) throw new HttpError(400, 'Canal do recurso não existe');
   }
   await db.prepare(UPSERT_RECURSO)
-    .bind(r.id, r.tipo, r.titulo, r.conteudo, r.url, r.tags, r.canalId, r.favorito)
+    .bind(r.id, r.tipo, r.titulo, r.conteudo, r.url, r.tags, r.canalId, r.favorito, dono)
     .run();
   return r;
 }
@@ -638,6 +684,7 @@ async function exportAll(db) {
       descricao: c.descricao,
       anotacoes: c.anotacoes,
       cor: c.cor || '',
+      dono: c.dono_email || '',
       updatedAt: c.updated_at
     })),
     videos: videos.results.map((v) => ({
@@ -666,6 +713,7 @@ async function exportAll(db) {
       tags: r.tags,
       canalId: r.canal_id || '',
       favorito: Boolean(r.favorito),
+      dono: r.dono_email || '',
       createdAt: r.created_at,
       updatedAt: r.updated_at
     }))
